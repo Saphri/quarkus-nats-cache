@@ -4,12 +4,18 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 
 ## Build & test (Maven wrapper only)
 
-- Always use `./mvnw` (pins Maven 3.9.14). No local Maven, no CI, no lint/format tooling — the Maven build + tests are the only gate.
+- Always use `./mvnw` (pins the Maven version in `.mvn/wrapper/maven-wrapper.properties`; Dependabot keeps it current). No local Maven needed.
 - `./mvnw install` — builds all modules and runs both unit suites. Needs **Docker running** for the deployment suite (see below).
 - Single test: `./mvnw -pl runtime test -Dtest=KeyCodecTest` (or `-Dtest=Class#method`). Same pattern for `-pl deployment`.
 - Integration tests are **skipped by default** (`skipITs=true` in `integration-tests/pom.xml`). Run them explicitly, after `./mvnw install` (the IT module resolves the extension from the local repo):
   - JVM jar: `./mvnw -pl integration-tests verify -DskipITs=false`
   - Native image: `./mvnw install -DskipTests && ./mvnw -pl integration-tests verify -Dnative` (needs `native-image` on PATH; devcontainer ships Mandrel)
+
+## CI (GitHub Actions)
+
+- `.github/workflows/build.yml` (push to main + PRs, ubuntu, JDK 17 Temurin): `./mvnw -B clean install -Dno-format`, then the native step `./mvnw -B install -Dnative -Dquarkus.native.container-build -Dnative.surefire.skip`.
+- The `native-image` profile in `integration-tests/pom.xml` reads `${native.surefire.skip}`, which **no pom defines** — CI passes it as a flag. Mirror that when running `-Dnative` locally, or surefire's skip setting silently stays unresolved.
+- `.github/workflows/codeql.yml`: standard CodeQL for Java.
 
 ## Test prerequisites & quirks
 
@@ -35,5 +41,6 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 
 ## Workflow notes
 
+- Dependabot is active (`.github/dependabot.yml`): `maven` daily, `devcontainers` weekly. The maven updates also cover the **Maven wrapper** — Dependabot bumps `org.apache.maven:apache-maven` in `.mvn/wrapper/maven-wrapper.properties` (already done: 3.9.14 → 3.9.16) and plugin versions in the poms. Expect these PRs; don't revert or manually fight them.
 - OpenSpec is used for spec-driven changes but is **local-only**: `openspec/` and `.opencode/` are gitignored. Repo-local commands: `/opsx-propose`, `/opsx-explore`, `/opsx-apply`, `/opsx-archive`.
 - Devcontainer (`.devcontainer/devcontainer.json`) defines the intended environment: Java 25 + Mandrel, Maven, docker-in-docker.
