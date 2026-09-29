@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <!--
+    Standalone parent (Quarkiverse convention): we deliberately do NOT inherit from
+    io.quarkus:quarkus-extensions-parent, because its grandparent quarkus-build-parent
+    imports io.quarkus:quarkus-bom:${project.version} in dependencyManagement and Maven
+    re-interpolates ${project.version} against the child project (1.0.0-SNAPSHOT), which
+    breaks resolution. Instead we import the Quarkus BOM with an explicit property,
+    exactly like io.quarkiverse:quarkiverse-parent does for Quarkiverse extensions.
+  -->
+  <groupId>io.quarkiverse.nats-cache</groupId>
+  <artifactId>quarkus-nats-cache-parent</artifactId>
+  <version>999-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>Quarkus NATS KV Cache - Parent</name>
+  <description>Quarkus cache backend backed by NATS JetStream KV buckets</description>
+
+  <!-- Normally inherited from io.quarkus:quarkus-project (via quarkus-extensions-parent) or
+       io.quarkiverse:quarkiverse-parent; our standalone parent inherits from neither, so declare it. -->
+  <licenses>
+    <license>
+      <name>The Apache Software License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <modules>
+    <module>runtime</module>
+    <module>deployment</module>
+    <module>integration-tests</module>
+  </modules>
+
+  <scm>
+    <connection>scm:git:git@github.com:Saphri/quarkus-nats-cache.git</connection>
+    <developerConnection>scm:git:git@github.com:Saphri/quarkus-nats-cache.git</developerConnection>
+    <url>https://github.com/Saphri/quarkus-nats-cache</url>
+  </scm>
+
+  <properties>
+    <compiler-plugin.version>3.14.1</compiler-plugin.version>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    <!-- Quarkus platform version (BOM + extension-descriptor plugin) -->
+    <quarkus.version>3.40.0</quarkus.version>
+    <!-- Quarkiverse reactive-messaging-nats-jetstream extension (connection lifecycle,
+         reactive KeyValue API, dev service, native-image delegates). -->
+    <version.io.quarkiverse.reactivemessaging.nats-jetstream>3.39.7</version.io.quarkiverse.reactivemessaging.nats-jetstream>
+    <!-- Not managed by quarkus-bom; version matches the Quarkiverse parent POM. -->
+    <assertj-core.version>3.27.7</assertj-core.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.quarkus</groupId>
+        <artifactId>quarkus-bom</artifactId>
+        <version>${quarkus.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>io.quarkiverse.reactivemessaging.nats-jetstream</groupId>
+        <artifactId>quarkus-messaging-nats-jetstream</artifactId>
+        <version>${version.io.quarkiverse.reactivemessaging.nats-jetstream}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.quarkiverse.reactivemessaging.nats-jetstream</groupId>
+        <artifactId>quarkus-messaging-nats-jetstream-deployment</artifactId>
+        <version>${version.io.quarkiverse.reactivemessaging.nats-jetstream}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.assertj</groupId>
+        <artifactId>assertj-core</artifactId>
+        <version>${assertj-core.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>io.quarkus</groupId>
+          <artifactId>quarkus-maven-plugin</artifactId>
+          <version>${quarkus.version}</version>
+          <extensions>true</extensions>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${compiler-plugin.version}</version>
+          <configuration>
+            <parameters>true</parameters>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.5.4</version>
+          <configuration>
+            <systemPropertyVariables>
+              <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+            </systemPropertyVariables>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>3.5.4</version>
+          <configuration>
+            <systemPropertyVariables>
+              <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+            </systemPropertyVariables>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+
+</project>

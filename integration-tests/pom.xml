@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.quarkiverse.nats-cache</groupId>
+    <artifactId>quarkus-nats-cache-parent</artifactId>
+    <version>999-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>quarkus-nats-cache-integration-tests</artifactId>
+  <name>Quarkus NATS KV Cache - Integration Tests (native image)</name>
+
+  <!--
+    Task 6.1: a small application whose only job is to exercise the extension end-to-end inside a
+    native image. The @QuarkusIntegrationTest suite runs against the executable produced by
+    quarkus-maven-plugin (JVM or -Dnative), NOT in-process like the deployment module's @QuarkusTests.
+
+    Standard flow (Maven Wrapper — pins Maven 3.9.14, no local install needed):
+      ./mvnw install -DskipTests                                # build all modules (JVM) + publish locally
+      ./mvnw -pl integration-tests verify -Dnative              # build the native executable + run the ITs (failsafe)
+
+    The same suite can be run against a JVM jar instead:
+      ./mvnw -pl integration-tests verify -DskipITs=false
+  -->
+
+  <properties>
+    <skipITs>true</skipITs>
+  </properties>
+
+  <dependencies>
+    <!-- The extension under test (runtime jar; Quarkus pulls the deployment jar in at augmentation) -->
+    <dependency>
+      <groupId>io.quarkiverse.nats-cache</groupId>
+      <artifactId>quarkus-nats-cache</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- REST surface so the @QuarkusIntegrationTest can drive the cache over HTTP
+         (bean injection is not supported in integration tests — standard Quarkus pattern). -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest</artifactId>
+    </dependency>
+    <!-- JSON body support for the REST surface (without it POJO bodies 415 and responses fall back
+    to toString()). -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest-jackson</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-junit</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>io.quarkus</groupId>
+        <artifactId>quarkus-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>build</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <systemPropertyVariables>
+            <native.image.path>${project.build.directory}/${project.build.finalName}-runner</native.image.path>
+            <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+            <maven.home>${maven.home}</maven.home>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <profile>
+      <id>native-image</id>
+      <activation>
+        <property>
+          <name>native</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <skipTests>${native.surefire.skip}</skipTests>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+      <properties>
+        <skipITs>false</skipITs>
+        <quarkus.native.enabled>true</quarkus.native.enabled>
+      </properties>
+    </profile>
+  </profiles>
+
+</project>

@@ -1,0 +1,8 @@
+name: "NATS KV Cache"
+description: "Quarkus cache backend backed by NATS JetStream KV buckets (select with quarkus.cache.type=nats)."
+metadata:
+  icon: ""
+  keywords: [cache, nats, jetstream, kv]
+  categories: [caching]
+  status: preview
+  build-commands: ["mvn clean install -DskipTests"]
