@@ -251,7 +251,8 @@ for entries written with a per-item duration, and `data` is `null` for cached nu
 ## Building
 
 All builds use the [Maven Wrapper](https://maven.apache.org/wrapper/) (`./mvnw`), which pins the Maven
-version (3.9.14) — no local Maven installation required:
+version (see `.mvn/wrapper/maven-wrapper.properties`, kept current by Dependabot) — no local Maven
+installation required:
 
 ```bash
 ./mvnw install              # build all modules + run the unit suites (runtime 26, deployment 25)
