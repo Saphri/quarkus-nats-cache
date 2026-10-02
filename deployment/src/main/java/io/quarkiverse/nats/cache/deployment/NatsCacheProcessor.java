@@ -6,6 +6,7 @@ import org.jboss.jandex.ClassInfo;
 
 import io.quarkiverse.nats.cache.runtime.NatsCacheBuildRecorder;
 import io.quarkiverse.nats.cache.runtime.NatsCachesBuildTimeConfig;
+import io.quarkus.arc.deployment.ValidationPhaseBuildItem;
 import io.quarkus.cache.DefaultCacheKey;
 import io.quarkus.cache.deployment.CacheManagerInfoBuildItem;
 import io.quarkus.cache.deployment.CacheNamesBuildItem;
@@ -13,12 +14,10 @@ import io.quarkus.cache.runtime.CacheBuildConfig;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
-import io.quarkus.deployment.annotations.Produce;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.ApplicationIndexBuildItem;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.deployment.builditem.nativeimage.ReflectiveClassBuildItem;
-import io.quarkus.deployment.pkg.builditem.ArtifactResultBuildItem;
 
 /**
  * Deployment build steps for the NATS KV cache backend.
@@ -75,6 +74,11 @@ public class NatsCacheProcessor {
             return; // no nats-backed cache: nothing is (de)serialized by the codec
         }
         for (ClassInfo appClass : appIndex.getIndex().getKnownClasses()) {
+            // Interfaces and annotations are never instantiated by Jackson default typing (the embedded
+            // type id always names a concrete class); registering them only bloats the native image.
+            if (appClass.isInterface() || appClass.isAnnotation()) {
+                continue;
+            }
             producer.produce(ReflectiveClassBuildItem.builder(appClass.name().toString())
                     .reason("quarkus-nats-cache: cached values are arbitrary application types, "
                             + "reconstructed reflectively by Jackson default typing")
@@ -90,13 +94,16 @@ public class NatsCacheProcessor {
      * the same bucket because of the default name-to-bucket derivation fail the build, naming both caches and
      * pointing at the explicit bucket property. Deliberate sharing via explicit {@code bucket=} values is allowed.
      *
-     * <p>{@link Produce @Produce(ArtifactResultBuildItem.class)} marks this as an always-executed step: it neither
-     * produces nor consumes a cache-specific build item, so without the marker the builder would drop it from the chain.
+     * <p>Reported as Quarkus validation errors (standard diagnostics, grouped with any other validation
+     * failure) instead of a raw {@code DeploymentException}; producing build items also keeps this step in
+     * the build graph without an artificial always-run marker.
      */
     @BuildStep
-    @Produce(ArtifactResultBuildItem.class)
     void validateBucketCollisions(CacheNamesBuildItem cacheNames, CacheBuildConfig cacheBuildConfig,
-            NatsCachesBuildTimeConfig natsConfig) {
-        BucketCollisionValidator.validate(cacheNames.getNames(), cacheBuildConfig, natsConfig);
+            NatsCachesBuildTimeConfig natsConfig,
+            BuildProducer<ValidationPhaseBuildItem.ValidationErrorBuildItem> validationErrors) {
+        for (String message : BucketCollisionValidator.findCollisions(cacheNames.getNames(), cacheBuildConfig, natsConfig)) {
+            validationErrors.produce(new ValidationPhaseBuildItem.ValidationErrorBuildItem(new IllegalStateException(message)));
+        }
     }
 }

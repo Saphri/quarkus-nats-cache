@@ -11,7 +11,9 @@ import org.jboss.logging.Logger;
 
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkus.arc.Arc;
+import io.quarkus.arc.InjectableInstance;
 import io.quarkus.cache.Cache;
+import io.quarkus.cache.CacheException;
 import io.quarkus.cache.CacheManager;
 import io.quarkus.cache.CacheManagerInfo;
 import io.quarkus.cache.runtime.CacheManagerImpl;
@@ -54,7 +56,13 @@ public class NatsCacheBuildRecorder {
                 // Only the names of caches configured with type "nats" reach this supplier.
                 Set<String> cacheNames = context.cacheNames();
                 return () -> {
-                    Client client = Arc.container().instance(Client.class).get();
+                    InjectableInstance<Client> clientInstance = Arc.container().select(Client.class);
+                    if (clientInstance.isUnsatisfied()) {
+                        throw new CacheException("No NATS JetStream 'Client' bean is available for the nats cache "
+                                + "backend; ensure the quarkus-messaging-nats-jetstream extension is on the classpath "
+                                + "and a NATS data source is configured (quarkus.messaging.nats.*)", null);
+                    }
+                    Client client = clientInstance.get();
                     Map<String, Cache> caches = new HashMap<>(cacheNames.size() + 1);
                     for (String name : cacheNames) {
                         NatsCacheInfo info = infoFor(name);

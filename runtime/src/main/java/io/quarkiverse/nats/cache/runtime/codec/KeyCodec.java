@@ -150,17 +150,20 @@ public final class KeyCodec {
      */
     private static void validateRoundTrip(Object key, byte[] json) {
         Class<?> keyClass = key.getClass();
+        if (key instanceof CompositeCacheKey composite) {
+            // A previously validated composite says nothing about the elements of a new one, so element
+            // validation must not be skipped by the memo check. Each element class carries its own memo
+            // entry, so repeat keys stay cheap.
+            for (Object element : composite.getKeyElements()) {
+                validateElement(element);
+            }
+            return;
+        }
         if (ROUND_TRIP_VALIDATED.containsKey(keyClass)) {
             return;
         }
         try {
-            if (key instanceof CompositeCacheKey composite) {
-                for (Object element : composite.getKeyElements()) {
-                    validateElement(element);
-                }
-            } else {
-                fromJson(json); // trial reconstruction; throws CacheKeyEncodingException if not reconstructable
-            }
+            fromJson(json); // trial reconstruction; throws CacheKeyEncodingException if not reconstructable
         } catch (CacheKeyEncodingException e) {
             throw new CacheKeyEncodingException(
                     "Cache key class '" + keyClass.getName() + "' is not supported by the NATS KV cache codec: "
@@ -171,6 +174,9 @@ public final class KeyCodec {
     }
 
     private static void validateElement(Object element) {
+        if (element == null) {
+            return; // null elements are representable (NullNode) and decode back to null
+        }
         Class<?> elementClass = element.getClass();
         if (ROUND_TRIP_VALIDATED.containsKey(elementClass)) {
             return;

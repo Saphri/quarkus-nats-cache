@@ -250,11 +250,15 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
 
     // ------------------------------------------------------------------ internal types
 
-    /** Internal failure marker distinguishing "no usable entry" (miss / logically expired) from real errors. */
+    /**
+     * Internal failure marker distinguishing "no usable entry" (miss / logically expired) from real errors.
+     * Misses are a hot-path event, so stack-trace filling and suppression are disabled to avoid the
+     * allocation cost on every miss.
+     */
     private static final class CacheMiss extends RuntimeException {
 
         private CacheMiss() {
-            super("cache miss");
+            super(null, null, false, false);
         }
     }
 
