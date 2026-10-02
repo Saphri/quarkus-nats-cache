@@ -63,6 +63,35 @@
           </annotationProcessorPaths>
         </configuration>
       </plugin>
+      <plugin>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <executions>
+          <!-- QuarkusUnitTest (QuarkusExtensionTest) and @QuarkusTest cannot run in the same JVM: the
+               test framework refuses to mix AbstractQuarkusExtensionTest-based tests with
+               QuarkusTestExtension-based tests in one fork. Run each group in its own surefire
+               execution so each gets a fresh JVM. -->
+          <execution>
+            <id>default-test</id>
+            <configuration>
+              <includes>
+                <include>**/NatsCache*Test.java</include>
+              </includes>
+            </configuration>
+          </execution>
+          <execution>
+            <id>extension-scenario-tests</id>
+            <goals>
+              <goal>test</goal>
+            </goals>
+            <configuration>
+              <includes>
+                <!-- QuarkusExtensionTest-based scenario tests plus the plain-JUnit BucketCollisionValidatorTest. -->
+                <include>**/Bucket*Test.java</include>
+              </includes>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 

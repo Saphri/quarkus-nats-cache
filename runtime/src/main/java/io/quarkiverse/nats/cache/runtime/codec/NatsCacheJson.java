@@ -26,7 +26,17 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
  * Double, Boolean) serialize without a marker and decode back to their natural Java types; {@code Long} is
  * wrapped as {@code ["java.lang.Long",42]} so it stays distinct from {@code Integer}; POJOs get an
  * {@code @class} property carrying the exact runtime class name.
+ *
+ * <p><b>Typing mode:</b> {@link ObjectMapper.DefaultTyping#EVERYTHING} is deprecated since Jackson 2.17
+ * (removed in Jackson 3.0) and the documented alternative {@code NON_FINAL_AND_ENUMS} was rejected after
+ * empirical verification on Jackson 2.21.x: it does not type <em>final</em> classes, so final POJOs and
+ * immutable collections ({@code List.of}, {@code Map.of}) serialize without a type id and fail to decode
+ * back into their original shape. {@code EVERYTHING} is the only mode in which all of those round-trip
+ * (verified: scalars, enums, final POJOs, mutable and immutable collections). Quarkus 3.x pins Jackson 2.x,
+ * where this setting remains fully functional; if a future Quarkus ships Jackson 3, the codec must be
+ * revisited as part of that major migration.
  */
+@SuppressWarnings("deprecation") // DefaultTyping.EVERYTHING: see class javadoc for the verified rationale
 final class NatsCacheJson {
 
     /** Type-marker property name Jackson uses for default typing with {@code As.PROPERTY}. */

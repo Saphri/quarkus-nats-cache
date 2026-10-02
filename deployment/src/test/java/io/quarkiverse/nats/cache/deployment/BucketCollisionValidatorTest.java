@@ -1,17 +1,14 @@
 package io.quarkiverse.nats.cache.deployment;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-
-import jakarta.enterprise.inject.spi.DeploymentException;
 
 import org.junit.jupiter.api.Test;
 
@@ -27,38 +24,45 @@ class BucketCollisionValidatorTest {
     private static final Set<String> COLLIDING_NAMES = new HashSet<>(Set.of("my.cache", "my_cache"));
 
     @Test
-    void derivedBucketCollisionFailsNamingBothCaches() {
-        assertThatThrownBy(() -> BucketCollisionValidator.validate(
-                COLLIDING_NAMES, config("nats", Map.of()), natsConfig(Map.of())))
-                .isInstanceOf(DeploymentException.class)
-                .hasMessageContainingAll("MY_CACHE", "'my.cache'", "'my_cache'")
-                .hasMessageContaining("quarkus.nats-cache.caches.<name>.bucket");
+    void derivedBucketCollisionIsReportedNamingBothCaches() {
+        List<String> errors = BucketCollisionValidator.findCollisions(
+                COLLIDING_NAMES, config("nats", Map.of()), natsConfig(Map.of()));
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0))
+                .contains("MY_CACHE")
+                .contains("'my.cache'")
+                .contains("'my_cache'")
+                .contains("quarkus.nats-cache.caches.<name>.bucket");
     }
 
     @Test
     void explicitlySharedBucketIsAllowed() {
-        assertThatCode(() -> BucketCollisionValidator.validate(
+        assertThat(BucketCollisionValidator.findCollisions(
                 Set.of("alpha", "beta"), config("nats", Map.of()),
                 natsConfig(Map.of("alpha", bucket("SHARED"), "beta", bucket("SHARED")))))
-                .doesNotThrowAnyException();
+                        .isEmpty();
     }
 
     @Test
-    void explicitBucketCollidingWithDerivedOneFails() {
-        // 'x' explicitly chooses Y_CACHE while 'y_cache' derives to the same bucket.
-        assertThatThrownBy(() -> BucketCollisionValidator.validate(
+    void explicitBucketCollidingWithDerivedOneIsReported() {
+        // 'x' explicitly chooses Y_CACHE while 'y_cache' derives to the same bucket: still an accidental
+        // collision (invalidateAll on one cache would wipe the other's entries), so it must be reported.
+        List<String> errors = BucketCollisionValidator.findCollisions(
                 Set.of("x", "y_cache"), config("nats", Map.of()),
-                natsConfig(Map.of("x", bucket("Y_CACHE")))))
-                .isInstanceOf(DeploymentException.class)
-                .hasMessageContainingAll("Y_CACHE", "'x'", "'y_cache'");
+                natsConfig(Map.of("x", bucket("Y_CACHE"))));
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0))
+                .contains("Y_CACHE")
+                .contains("'x'")
+                .contains("'y_cache'");
     }
 
     @Test
     void nonNatsCachesAreIgnored() {
         // Same derived-bucket pattern, but the caches are of another backend type.
-        assertThatCode(() -> BucketCollisionValidator.validate(
+        assertThat(BucketCollisionValidator.findCollisions(
                 COLLIDING_NAMES, config("caffeine", Map.of()), natsConfig(Map.of())))
-                .doesNotThrowAnyException();
+                        .isEmpty();
     }
 
     @Test
@@ -66,16 +70,16 @@ class BucketCollisionValidatorTest {
         // 'my_cache' is overridden to another backend, so only one nats cache remains on MY_CACHE.
         Map<String, String> overrides = new HashMap<>();
         overrides.put("my_cache", "caffeine");
-        assertThatCode(() -> BucketCollisionValidator.validate(
+        assertThat(BucketCollisionValidator.findCollisions(
                 COLLIDING_NAMES, config("nats", overrides), natsConfig(Map.of())))
-                .doesNotThrowAnyException();
+                        .isEmpty();
     }
 
     @Test
     void distinctDerivedBucketsAreFine() {
-        assertThatCode(() -> BucketCollisionValidator.validate(
+        assertThat(BucketCollisionValidator.findCollisions(
                 Set.of("alpha", "beta"), config("nats", Map.of()), natsConfig(Map.of())))
-                .doesNotThrowAnyException();
+                        .isEmpty();
     }
 
     // ------------------------------------------------------------------ test doubles

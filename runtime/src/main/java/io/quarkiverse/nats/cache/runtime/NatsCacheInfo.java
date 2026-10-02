@@ -14,6 +14,9 @@ import java.util.Optional;
  */
 public record NatsCacheInfo(String name, String bucket, Optional<Duration> ttl, int history) {
 
+    /** NATS KV bucket name charset (subject-safe; verified against the JNats server-side rules). */
+    static final String BUCKET_NAME_PATTERN = "[A-Z0-9_-]+";
+
     /**
      * Derives the cache info from raw configuration.
      *
@@ -27,6 +30,11 @@ public record NatsCacheInfo(String name, String bucket, Optional<Duration> ttl, 
             throw new IllegalArgumentException("Cache name must not be null or empty");
         }
         String bucket = explicitBucket.orElse(defaultBucket(name));
+        if (!bucket.matches(BUCKET_NAME_PATTERN)) {
+            throw new IllegalArgumentException(
+                    "quarkus.nats-cache.caches." + name + ".bucket value '" + bucket
+                            + "' is not a valid NATS KV bucket name; it must match " + BUCKET_NAME_PATTERN);
+        }
         if (history < 1 || history > 64) {
             throw new IllegalArgumentException(
                     "quarkus.nats-cache.caches." + name + ".history must be between 1 and 64 but was " + history);
