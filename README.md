@@ -125,7 +125,8 @@ quarkus.nats-cache.caches.weather.history=5
 Bucket provisioning is **add-if-absent**: if the bucket already exists (created by other tooling, or shared
 with another cache), it is used unmodified. If two `nats`-typed caches would *derive* the same default bucket
 name (e.g. `my.cache` and `my_cache` both map to `MY_CACHE`), the **build fails** with an error naming both
-caches — set an explicit `bucket=` on one of them to share a bucket deliberately.
+caches — to share a bucket deliberately, set an explicit `bucket=` on *each* of them; an explicit bucket next
+to a derived one is still treated as an accidental collision.
 
 ### Connection settings (underlying extension)
 

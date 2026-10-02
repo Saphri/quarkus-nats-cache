@@ -206,6 +206,15 @@ class KeyCodecTest {
     }
 
     @Test
+    void compositeKeysWithNullElementsRoundTrip() {
+        CompositeCacheKey key = new CompositeCacheKey(null, "fallback");
+        Object decoded = KeyCodec.decode(KeyCodec.encode(key));
+        assertThat(decoded).isInstanceOf(CompositeCacheKey.class);
+        assertThat(decoded).isEqualTo(key);
+        assertThat(((CompositeCacheKey) decoded).getKeyElements()).containsExactly(null, "fallback");
+    }
+
+    @Test
     void defaultCacheKeysRoundTrip() {
         DefaultCacheKey key = new DefaultCacheKey("my-cache");
         Object decoded = KeyCodec.decode(KeyCodec.encode(key));

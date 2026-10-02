@@ -127,6 +127,17 @@ class ValueCodecTest {
         assertThat(ValueCodec.decode(ValueCodec.encode(map, null)).data()).isEqualTo(map);
     }
 
+    @Test
+    void valueResemblingEnvelopeRoundTripsUnambiguously() {
+        // A user value whose JSON shape mimics the envelope ({@code data}/{@code exp} members) must not be
+        // confused with an actual envelope: it is embedded as the typed encoding of the {@code data} member.
+        Map<String, Object> value = new java.util.LinkedHashMap<>();
+        value.put("data", "x");
+        value.put("exp", 123L);
+        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode(value, null));
+        assertThat(env.data()).isEqualTo(value);
+    }
+
     // --- null sentinel ---------------------------------------------------------
 
     @Test

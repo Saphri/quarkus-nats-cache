@@ -1,13 +1,13 @@
 package io.quarkiverse.nats.cache.deployment;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
-
-import jakarta.enterprise.inject.spi.DeploymentException;
 
 import io.quarkiverse.nats.cache.runtime.NatsCacheBuildRecorder;
 import io.quarkiverse.nats.cache.runtime.NatsCachesBuildTimeConfig;
@@ -20,8 +20,9 @@ import io.quarkus.cache.runtime.CacheBuildConfig;
  * <p>The default name-to-bucket derivation ({@link NatsCacheInfo#defaultBucket(String)}) is not injective: for
  * example {@code my.cache} and {@code my_cache} both derive to {@code MY_CACHE}. When two {@code nats}-typed
  * caches end up on the same bucket because of that derivation, the build fails naming both caches and pointing
- * at the explicit bucket property. Two caches that <em>explicitly</em> configure the same bucket are allowed:
- * sharing a bucket is then a deliberate choice.
+ * at the explicit bucket property. A shared bucket is only allowed when <em>every</em> cache in the group pins
+ * it explicitly: an explicit bucket next to a derived one is still an accidental collision (and would make
+ * {@code invalidateAll()} on one cache wipe the other's entries).
  */
 final class BucketCollisionValidator {
 
@@ -32,9 +33,10 @@ final class BucketCollisionValidator {
      * @param cacheNames the cache names referenced by the application (from {@code CacheNamesBuildItem})
      * @param cacheBuildConfig the core cache build-time config ({@code quarkus.cache.type} + per-name overrides)
      * @param natsConfig this extension's build-time config ({@code quarkus.nats-cache.caches.<name>.*})
-     * @throws DeploymentException if two {@code nats} caches derive the same bucket
+     * @return one error message per colliding bucket (empty when no collision exists)
      */
-    static void validate(Set<String> cacheNames, CacheBuildConfig cacheBuildConfig, NatsCachesBuildTimeConfig natsConfig) {
+    static List<String> findCollisions(Set<String> cacheNames, CacheBuildConfig cacheBuildConfig,
+            NatsCachesBuildTimeConfig natsConfig) {
         Map<String, Set<String>> bucketToCaches = new LinkedHashMap<>();
         Map<String, Boolean> explicitByCache = new LinkedHashMap<>();
 
@@ -49,6 +51,7 @@ final class BucketCollisionValidator {
             explicitByCache.put(name, explicitBucket.isPresent());
         }
 
+        List<String> errors = new ArrayList<>();
         for (Map.Entry<String, Set<String>> entry : bucketToCaches.entrySet()) {
             Set<String> caches = entry.getValue();
             if (caches.size() < 2) {
@@ -68,8 +71,9 @@ final class BucketCollisionValidator {
                 message.append(" Note: a cache name containing '.' cannot be addressed by per-name properties at all ")
                         .append("(smallrye-config property-naming limitation; it also affects the core quarkus.cache.<name>.type override) — rename such a cache instead.");
             }
-            throw new DeploymentException(message.toString());
+            errors.add(message.toString());
         }
+        return errors;
     }
 
     /**
