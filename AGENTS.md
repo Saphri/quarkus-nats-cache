@@ -15,7 +15,7 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 
 - `.github/workflows/build.yml` (push to main + PRs, ubuntu, JDK 17 Temurin): `./mvnw -B clean install -Dno-format`, then the native step `./mvnw -B install -Dnative -Dquarkus.native.container-build -Dnative.surefire.skip`.
 - The `native-image` profile in `integration-tests/pom.xml` reads `${native.surefire.skip}`, which **no pom defines** — CI passes it as a flag. Mirror that when running `-Dnative` locally, or surefire's skip setting silently stays unresolved.
-- `.github/workflows/codeql.yml`: standard CodeQL for Java.
+- `.github/workflows/codeql.yml`: CodeQL for Java with `build-mode: none` (no compile step; enables incremental overlay scans on PRs).
 
 ## Test prerequisites & quirks
 
