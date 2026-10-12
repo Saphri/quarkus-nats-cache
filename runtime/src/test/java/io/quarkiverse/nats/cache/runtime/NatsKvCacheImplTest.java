@@ -115,6 +115,14 @@ class NatsKvCacheImplTest {
         return uni.await().atMost(Duration.ofSeconds(5));
     }
 
+    /**
+     * Completes the (asynchronous) bucket provisioning up front, so that a subsequent {@code getAsync} reaches its
+     * loader synchronously on subscription and the test can drive the loader's emitter deterministically.
+     */
+    private void provisionBucket() {
+        await(cache.<String, String> get("warm-up", k -> "w"));
+    }
+
     @Test
     void unreachableServerFallsThroughToTheLoader() {
         fake.readsFail = true;
@@ -141,6 +149,7 @@ class NatsKvCacheImplTest {
 
     @Test
     void cancellingTheLoadingCallerDoesNotStrandWaiters() {
+        provisionBucket();
         AtomicInteger loads = new AtomicInteger();
         AtomicInteger cancellations = new AtomicInteger();
         UniEmitter<? super String>[] emitter = new UniEmitter[1];
@@ -167,6 +176,7 @@ class NatsKvCacheImplTest {
 
     @Test
     void cancellingAWaiterDoesNotAffectOtherCallers() {
+        provisionBucket();
         UniEmitter<? super String>[] emitter = new UniEmitter[1];
         java.util.function.Function<String, Uni<String>> loader = k -> Uni.createFrom().emitter(e -> emitter[0] = e);
 
