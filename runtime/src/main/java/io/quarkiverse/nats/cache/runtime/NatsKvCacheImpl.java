@@ -13,6 +13,7 @@ import org.jboss.logging.Logger;
 
 import io.nats.client.JetStreamApiException;
 import io.nats.client.KeyValueManagement;
+import io.nats.client.MessageTtl;
 import io.nats.client.PublishOptions;
 import io.nats.client.impl.NatsMessage;
 import io.nats.client.support.NatsKeyValueUtil;
@@ -108,7 +109,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         return doGet(key, valueLoader::apply, messageTtlOf(expiresAfter));
     }
 
-    private <K, V> Uni<V> doGet(K key, Function<K, Uni<V>> loader, String messageTtl) {
+    private <K, V> Uni<V> doGet(K key, Function<K, Uni<V>> loader, MessageTtl messageTtl) {
         return Uni.createFrom().deferred(() -> {
             Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED_MSG);
             // Fail-fast (design D4): names the offending class and rejects over-length encodings; deferred turns
@@ -147,10 +148,11 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     }
 
     /**
-     * Converts {@code expiresAfter} to a {@code Nats-TTL} header value. The server truncates TTLs to whole seconds
-     * and rejects anything below one second, so the duration is rounded up: an entry never expires early.
+     * Converts {@code expiresAfter} to a per-message TTL. The server truncates TTLs to whole seconds and rejects
+     * anything below one second, so the duration is rounded up: an entry never expires early. Durations beyond
+     * {@code Integer.MAX_VALUE} seconds (about 68 years) are capped there.
      */
-    static String messageTtlOf(Duration expiresAfter) {
+    static MessageTtl messageTtlOf(Duration expiresAfter) {
         if (expiresAfter == null) {
             return null;
         }
@@ -158,12 +160,12 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
             throw new IllegalArgumentException("expiresAfter must be positive");
         }
         long seconds = expiresAfter.getSeconds() + (expiresAfter.getNano() > 0 ? 1 : 0);
-        return seconds + "s";
+        return MessageTtl.seconds((int) Math.min(seconds, Integer.MAX_VALUE));
     }
 
     // ------------------------------------------------------------------ stampede protection (design D3)
 
-    private <K, V> Uni<V> loadAndStore(K key, String encoded, Function<K, Uni<V>> loader, String messageTtl) {
+    private <K, V> Uni<V> loadAndStore(K key, String encoded, Function<K, Uni<V>> loader, MessageTtl messageTtl) {
         return Uni.createFrom().deferred(() -> {
             CompletableFuture<Object> pending = new CompletableFuture<>();
             CompletableFuture<Object> shared = inFlight.putIfAbsent(encoded, pending);
@@ -190,7 +192,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         });
     }
 
-    private <V> Uni<V> store(String encoded, V value, String messageTtl) {
+    private <V> Uni<V> store(String encoded, V value, MessageTtl messageTtl) {
         // Encoding errors are programming errors (unserializable value) and fail the call; a failed write is a
         // cache outage and does not (fail open): the loaded value is returned, just not cached.
         byte[] payload = ValueCodec.encode(value);
@@ -210,12 +212,12 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
      * JNats only offers one on {@code create} (which refuses existing keys), so this publishes to the key's subject
      * directly, which is exactly what a KV put is, with the {@code Nats-TTL} header added.
      */
-    private Uni<?> putWithTtl(String encoded, byte[] payload, String messageTtl) {
+    private Uni<?> putWithTtl(String encoded, byte[] payload, MessageTtl messageTtl) {
         return Uni.createFrom().deferred(() -> {
             try {
                 return Uni.createFrom().completionStage(client.nativeConnection().jetStream().publishAsync(
                         NatsMessage.builder().subject(keySubject + encoded).data(payload).build(),
-                        PublishOptions.builder().messageTtlCustom(messageTtl).build()));
+                        PublishOptions.builder().messageTtl(messageTtl).build()));
             } catch (IOException e) {
                 return Uni.createFrom().failure(e);
             }
