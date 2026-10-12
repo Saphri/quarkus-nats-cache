@@ -3,12 +3,19 @@ package io.quarkiverse.nats.cache.runtime.codec;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.cache.CompositeCacheKey;
 import io.quarkus.cache.DefaultCacheKey;
 
 class KeyCodecTest {
+
+    @BeforeAll
+    static void allowFixtureTypes() {
+        // In an application the deployment module registers the application's packages; here, the fixtures'.
+        CacheTypeAllowList.allowExactPackages(java.util.Set.of(KeyCodecTest.class.getPackageName()));
+    }
 
     // --- key fixtures -------------------------------------------------------
 
