@@ -118,7 +118,17 @@ class BucketCollisionValidatorTest {
                 return 1;
             }
         }));
-        return () -> caches;
+        return new NatsCachesBuildTimeConfig() {
+            @Override
+            public Map<String, Cache> caches() {
+                return caches;
+            }
+
+            @Override
+            public Optional<List<String>> allowedPackages() {
+                return Optional.empty();
+            }
+        };
     }
 
     private static Optional<String> bucket(String value) {

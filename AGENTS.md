@@ -15,7 +15,7 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 
 - `.github/workflows/build.yml` (push to main + PRs, ubuntu, JDK 17 Temurin): `./mvnw -B clean install -Dno-format`, then the native step `./mvnw -B install -Dnative -Dquarkus.native.container-build -Dnative.surefire.skip`.
 - The `native-image` profile in `integration-tests/pom.xml` reads `${native.surefire.skip}`, which **no pom defines** — CI passes it as a flag. Mirror that when running `-Dnative` locally, or surefire's skip setting silently stays unresolved.
-- `.github/workflows/codeql.yml`: standard CodeQL for Java.
+- `.github/workflows/codeql.yml`: CodeQL for Java with `build-mode: none` (no compile step; enables incremental overlay scans on PRs).
 
 ## Test prerequisites & quirks
 
@@ -41,6 +41,6 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 
 ## Workflow notes
 
-- Dependabot is active (`.github/dependabot.yml`): `maven` daily, `devcontainers` weekly. The maven updates also cover the **Maven wrapper** — Dependabot bumps `org.apache.maven:apache-maven` in `.mvn/wrapper/maven-wrapper.properties` (already done: 3.9.14 → 3.9.16) and plugin versions in the poms. Expect these PRs; don't revert or manually fight them.
+- Dependabot is active (`.github/dependabot.yml`): `maven` daily, `devcontainers` and `github-actions` weekly. The maven updates also cover the **Maven wrapper** — Dependabot bumps `org.apache.maven:apache-maven` in `.mvn/wrapper/maven-wrapper.properties` (already done: 3.9.14 → 3.9.16) and plugin versions in the poms. Expect these PRs; don't revert or manually fight them.
 - OpenSpec is used for spec-driven changes but is **local-only**: `openspec/` and `.opencode/` are gitignored. Repo-local commands: `/opsx-propose`, `/opsx-explore`, `/opsx-apply`, `/opsx-archive`.
 - Devcontainer (`.devcontainer/devcontainer.json`) defines the intended environment: Java 25 + Mandrel, Maven, docker-in-docker.

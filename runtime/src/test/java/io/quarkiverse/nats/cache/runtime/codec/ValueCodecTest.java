@@ -6,9 +6,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 class ValueCodecTest {
+
+    @BeforeAll
+    static void allowFixtureTypes() {
+        // In an application the deployment module registers the application's packages; here, the fixtures'.
+        CacheTypeAllowList.allowExactPackages(java.util.Set.of(KeyCodecTest.class.getPackageName()));
+    }
 
     public static final class Order {
         private String id;
