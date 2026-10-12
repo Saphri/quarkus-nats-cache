@@ -1,10 +1,10 @@
 package io.quarkiverse.nats.cache.runtime.codec;
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 /**
@@ -35,6 +35,10 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
  * (verified: scalars, enums, final POJOs, mutable and immutable collections). Quarkus 3.x pins Jackson 2.x,
  * where this setting remains fully functional; if a future Quarkus ships Jackson 3, the codec must be
  * revisited as part of that major migration.
+ *
+ * <p><b>Type safety:</b> stored type ids are untrusted input, so the typed mapper only resolves classes
+ * accepted by {@link CacheTypeAllowList}. Unknown properties are ignored so that entries written before a
+ * field was removed from a cached class still decode after a rolling deploy.
  */
 @SuppressWarnings("deprecation") // DefaultTyping.EVERYTHING: see class javadoc for the verified rationale
 final class NatsCacheJson {
@@ -54,10 +58,11 @@ final class NatsCacheJson {
     private static ObjectMapper createTypedMapper() {
         ObjectMapper mapper = JsonMapper.builder()
                 .activateDefaultTyping(
-                        LaissezFaireSubTypeValidator.instance,
+                        CacheTypeAllowList.VALIDATOR,
                         ObjectMapper.DefaultTyping.EVERYTHING,
                         JsonTypeInfo.As.PROPERTY)
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                 .build();
         // jackson-datatype-jsr310 is provided by quarkus-jackson; register it so JSR-310 date/time
         // types round-trip instead of failing with "Java 8 date/time type not supported by default".

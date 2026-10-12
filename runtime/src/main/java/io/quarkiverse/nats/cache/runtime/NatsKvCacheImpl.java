@@ -25,9 +25,11 @@ import io.smallrye.mutiny.Uni;
  * Implementation of the Quarkus cache API backed by a NATS JetStream KV bucket (design D1–D8).
  *
  * <p>Read path: {@code get}/{@code getAsync} first read the entry for the encoded key; a miss (or a logically
- * expired entry, design D6) falls through to the value loader. Concurrent loads of the same key share a single
- * loader execution via the in-flight map (design D3). The loaded value is stored with the universal envelope
- * ({@code {exp?, data}}), so cached {@code null} results and per-item expirations round-trip losslessly.
+ * expired entry, design D6) falls through to the value loader. The read path fails open: an unreadable entry or
+ * an unreachable server also falls through to the loader, and a failed write still returns the loaded value.
+ * Concurrent loads of the same key share a single loader execution via the in-flight map (design D3). The loaded
+ * value is stored with the universal envelope ({@code {exp?, data}}), so cached {@code null} results and
+ * per-item expirations round-trip losslessly.
  *
  * <p>Invalidation: {@code invalidate(key)} purges the key (including its history); {@code invalidateAll()} purges
  * the whole KV stream through raw JNats; {@code invalidateIf(predicate)} streams the bucket's keys, decodes each
@@ -101,8 +103,16 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
                     .chain(() -> kv.get(encoded))
                     .onItem().ifNull().failWith(CacheMiss::new) // quarkiverse 3.39.x reports a miss as a null item
                     .flatMap(this::readEntry) // decoded value is an opaque Object; cast once, at the end
-                    .onFailure(CacheMiss.class)
-                    .recoverWithUni(() -> loadAndStore(key, encoded, loader, expiresAtEpochMillis))
+                    // Fail open: a miss, an unreadable entry (corrupt, refused type, or written by an incompatible
+                    // class version) and an unreachable server all fall through to the loader, so a cache problem
+                    // costs latency instead of failing the cached method.
+                    .onFailure().recoverWithUni(failure -> {
+                        if (!(failure instanceof CacheMiss)) {
+                            LOGGER.warnf("NATS KV cache [%s]: read failed, falling back to the value loader: %s",
+                                    info.name(), failure.toString());
+                        }
+                        return loadAndStore(key, encoded, loader, expiresAtEpochMillis);
+                    })
                     .map(v -> (V) v); // unchecked: V is the caller's static type of the cached value
         });
     }
@@ -112,7 +122,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         if (payload == null || payload.length == 0) {
             throw new CacheMiss(); // empty payload (tombstone or foreign data) → miss
         }
-        ValueCodec.Envelope envelope = ValueCodec.decode(payload); // legacy/corrupt payload → CacheValueException (clean failure)
+        ValueCodec.Envelope envelope = ValueCodec.decode(payload); // undecodable → CacheValueException → reload
         if (envelope.isExpired(System.currentTimeMillis())) {
             throw new CacheMiss(); // logical TTL elapsed (design D6): re-run the loader; no server-side delete
         }
@@ -139,30 +149,41 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     private <K, V> Uni<V> loadAndStore(K key, String encoded, Function<K, Uni<V>> loader, Long expiresAtEpochMillis) {
         return Uni.createFrom().deferred(() -> {
             CompletableFuture<Object> pending = new CompletableFuture<>();
-            CompletableFuture<Object> existing = inFlight.putIfAbsent(encoded, pending);
-            if (existing != null) {
-                // Loser: await the winner's result (value or failure). The loader runs exactly once.
-                return Uni.createFrom().completionStage(existing).map(o -> (V) o);
+            CompletableFuture<Object> shared = inFlight.putIfAbsent(encoded, pending);
+            if (shared == null) {
+                // Winner: run load → store detached from any caller's subscription, so that cancelling one caller
+                // (client disconnect, upstream timeout) never cancels the shared load or strands the waiters.
+                // The map entry is removed before the future settles, so a settled future is never handed out.
+                shared = pending;
+                Uni.createFrom().deferred(() -> loader.apply(key))
+                        .flatMap(value -> store(encoded, value, expiresAtEpochMillis))
+                        .subscribe().with(
+                                value -> {
+                                    inFlight.remove(encoded, pending);
+                                    pending.complete(value); // may be null (cached-null): waiters get a null item
+                                },
+                                failure -> {
+                                    inFlight.remove(encoded, pending);
+                                    pending.completeExceptionally(failure);
+                                });
             }
-            // Winner: load → store → settle the shared future for every waiter.
-            return loader.apply(key)
-                    .flatMap(value -> storeAndSettle(encoded, value, expiresAtEpochMillis, pending))
-                    .onFailure().invoke(t -> {
-                        if (!pending.isDone()) {
-                            pending.completeExceptionally(t);
-                        }
-                    })
-                    // Fires on success, failure and cancellation alike, so the map entry is always reclaimed.
-                    .eventually(() -> inFlight.remove(encoded, pending));
+            // Every caller (winner included) awaits a copy: Mutiny cancels the CompletableFuture it subscribes to
+            // when the subscriber cancels, and that must only ever affect this caller.
+            return Uni.createFrom().completionStage(shared.copy()).map(o -> (V) o);
         });
     }
 
-    private <V> Uni<V> storeAndSettle(String encoded, V value, Long expiresAtEpochMillis, CompletableFuture<Object> pending) {
-        return kv.put(encoded, ValueCodec.encode(value, expiresAtEpochMillis))
-                .chain(entry -> {
-                    // May be null (cached-null sentinel): complete(null) is legal and losers receive a null item.
-                    pending.complete(value);
-                    return Uni.createFrom().item(value);
+    private <V> Uni<V> store(String encoded, V value, Long expiresAtEpochMillis) {
+        // Encoding errors are programming errors (unserializable value) and fail the call; a failed write is a
+        // cache outage and does not (fail open): the loaded value is returned, just not cached.
+        byte[] payload = ValueCodec.encode(value, expiresAtEpochMillis);
+        return kv.put(encoded, payload)
+                .onItemOrFailure().transform((entry, failure) -> {
+                    if (failure != null) {
+                        LOGGER.warnf("NATS KV cache [%s]: write failed, returning the loaded value uncached: %s",
+                                info.name(), failure.toString());
+                    }
+                    return value;
                 });
     }
 
@@ -221,7 +242,8 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     // ------------------------------------------------------------------ bucket provisioning (design D7)
 
     private Uni<Void> ensureBucket() {
-        return Uni.createFrom().completionStage(readyFuture());
+        // copy(): a cancelled caller must not cancel the shared provisioning future of every other caller.
+        return Uni.createFrom().completionStage(readyFuture().copy());
     }
 
     private CompletableFuture<Void> readyFuture() {

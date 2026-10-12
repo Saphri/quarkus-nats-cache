@@ -15,7 +15,10 @@ and native-image support all come from there.
 - Mixable with Caffeine in the same application (`nats` for shared caches, `caffeine` for local ones)
 - Lossless round-trip of arbitrary keys and values (Jackson JSON with embedded type info), including
   `CompositeCacheKey` and cached `null` results — no codec registration needed
-- Stampede protection: concurrent misses on the same key share one loader execution
+- Stampede protection: concurrent misses on the same key within one application instance share one loader
+  execution (instances do not coordinate with each other)
+- Fails open: if NATS is unreachable or an entry cannot be decoded, the loader runs and its value is returned,
+  so a cache problem costs latency rather than failing the cached method
 - Full invalidation surface: single key, all keys, predicate-based
 - Per-item expiration (`expiresAfter`) as a logical TTL under the bucket-TTL ceiling (see [Expiration](#expiration))
 - Zero-config local development and testing via the inherited NATS JetStream dev service (Docker)
@@ -128,6 +131,25 @@ name (e.g. `my.cache` and `my_cache` both map to `MY_CACHE`), the **build fails*
 caches — to share a bucket deliberately, set an explicit `bucket=` on *each* of them; an explicit bucket next
 to a derived one is still treated as an accidental collision.
 
+### Allowed key and value types
+
+| Property | Default | Description |
+|---|---|---|
+| `quarkus.nats-cache.allowed-packages` | *(none)* | Comma-separated package prefixes (sub-packages included) whose classes may be stored as cache keys or values, in addition to the always-allowed ones below. |
+
+Stored entries carry the class name of the key or value (see [Values](#values)), and the bucket is shared
+network state, so those class names are treated as **untrusted input**: the codec only instantiates classes from
+the application's own packages, the JDK value-type packages (`java.lang`, `java.util`, `java.time`,
+`java.math`) and `allowed-packages`. Anything else is refused and logged once with a hint to this property.
+Value types from a library (for example a shared model jar) need their package listed here:
+
+```properties
+quarkus.nats-cache.allowed-packages=com.acme.model
+```
+
+Treat write access to the cache buckets as a trust boundary all the same: anyone who can write to them can
+change what the application reads back.
+
 ### Connection settings (underlying extension)
 
 Connection, authentication, TLS and named data-sources are configured through the underlying
@@ -163,6 +185,10 @@ elements that contain collections, so that equal keys always encode identically.
 Values are stored as JSON with embedded type info, so a retrieved value is an instance of the **original
 runtime class** with all fields preserved — POJOs, nested objects, collections and maps round-trip losslessly,
 and `null` results are cached (the loader is not re-invoked while the sentinel is present).
+
+Entries written by an older version of a class still decode after a deploy: unknown properties are ignored.
+An entry that cannot be decoded at all (for example after a class was renamed or moved) is treated as a miss
+and overwritten with a freshly loaded value.
 
 A practical bonus: because values are readable JSON, you can inspect them directly from the NATS CLI
 (see [Debugging](#debugging-with-the-nats-cli)). Keys are opaque base64url by design; values are where the

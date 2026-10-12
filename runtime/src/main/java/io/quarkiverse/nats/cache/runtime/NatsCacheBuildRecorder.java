@@ -2,6 +2,7 @@ package io.quarkiverse.nats.cache.runtime;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -9,6 +10,7 @@ import java.util.function.Supplier;
 
 import org.jboss.logging.Logger;
 
+import io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.InjectableInstance;
@@ -75,6 +77,17 @@ public class NatsCacheBuildRecorder {
                 };
             }
         };
+    }
+
+    /**
+     * Configures the codec type allow-list: the application's own packages (from the build-time index) plus the
+     * configured {@code quarkus.nats-cache.allowed-packages} prefixes.
+     *
+     * @param applicationPackages the packages declaring application classes
+     */
+    public void allowTypes(Set<String> applicationPackages) {
+        CacheTypeAllowList.allowExactPackages(applicationPackages);
+        CacheTypeAllowList.allowPackagePrefixes(config.allowedPackages().orElse(List.of()));
     }
 
     private NatsCacheInfo infoFor(String name) {

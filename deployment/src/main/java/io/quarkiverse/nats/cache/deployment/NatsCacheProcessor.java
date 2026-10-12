@@ -1,6 +1,7 @@
 package io.quarkiverse.nats.cache.deployment;
 
 import java.util.Set;
+import java.util.TreeSet;
 
 import org.jboss.jandex.ClassInfo;
 
@@ -44,6 +45,24 @@ public class NatsCacheProcessor {
     @Record(value = ExecutionTime.RUNTIME_INIT)
     CacheManagerInfoBuildItem cacheManagerInfo(NatsCacheBuildRecorder recorder) {
         return new CacheManagerInfoBuildItem(recorder.getCacheManagerSupplier());
+    }
+
+    /**
+     * Codec type allow-list: stored entries may only name classes from the application's own packages (plus the
+     * JDK value types and {@code quarkus.nats-cache.allowed-packages}), never an arbitrary class on the classpath.
+     * Static init, so the list is in place before any cache operation can decode an entry.
+     */
+    @BuildStep
+    @Record(ExecutionTime.STATIC_INIT)
+    void allowedTypes(ApplicationIndexBuildItem appIndex, NatsCacheBuildRecorder recorder) {
+        Set<String> packages = new TreeSet<>();
+        for (ClassInfo appClass : appIndex.getIndex().getKnownClasses()) {
+            String pkg = appClass.name().packagePrefix();
+            if (pkg != null) {
+                packages.add(pkg);
+            }
+        }
+        recorder.allowTypes(packages);
     }
 
     /**
