@@ -195,11 +195,13 @@ class NatsKvCacheImplTest {
 
     @Test
     void expiresAfterIsRoundedUpToWholeSeconds() {
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofSeconds(2))).isEqualTo("2s");
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofMillis(1))).isEqualTo("1s");
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofMillis(1500))).isEqualTo("2s");
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofDays(30))).isEqualTo("2592000s");
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofSeconds(2)).getTtlString()).isEqualTo("2s");
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofMillis(1)).getTtlString()).isEqualTo("1s");
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofMillis(1500)).getTtlString()).isEqualTo("2s");
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofDays(30)).getTtlString()).isEqualTo("2592000s");
         assertThat(NatsKvCacheImpl.messageTtlOf(null)).isNull();
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofSeconds(Long.MAX_VALUE)).getTtlString())
+                .isEqualTo(Integer.MAX_VALUE + "s");
     }
 
     @Test
