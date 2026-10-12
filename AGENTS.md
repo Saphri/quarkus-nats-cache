@@ -41,6 +41,6 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 
 ## Workflow notes
 
-- Dependabot is active (`.github/dependabot.yml`): `maven` daily, `devcontainers` weekly. The maven updates also cover the **Maven wrapper** — Dependabot bumps `org.apache.maven:apache-maven` in `.mvn/wrapper/maven-wrapper.properties` (already done: 3.9.14 → 3.9.16) and plugin versions in the poms. Expect these PRs; don't revert or manually fight them.
+- Dependabot is active (`.github/dependabot.yml`): `maven` daily, `devcontainers` and `github-actions` weekly. The maven updates also cover the **Maven wrapper** — Dependabot bumps `org.apache.maven:apache-maven` in `.mvn/wrapper/maven-wrapper.properties` (already done: 3.9.14 → 3.9.16) and plugin versions in the poms. Expect these PRs; don't revert or manually fight them.
 - OpenSpec is used for spec-driven changes but is **local-only**: `openspec/` and `.opencode/` are gitignored. Repo-local commands: `/opsx-propose`, `/opsx-explore`, `/opsx-apply`, `/opsx-archive`.
 - Devcontainer (`.devcontainer/devcontainer.json`) defines the intended environment: Java 25 + Mandrel, Maven, docker-in-docker.
