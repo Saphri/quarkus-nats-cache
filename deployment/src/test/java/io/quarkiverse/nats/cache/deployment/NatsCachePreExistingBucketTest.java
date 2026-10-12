@@ -9,6 +9,7 @@ import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import io.quarkiverse.nats.cache.runtime.NatsKvCacheImpl;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkus.cache.Cache;
 import io.quarkus.cache.CacheName;
@@ -63,5 +64,14 @@ class NatsCachePreExistingBucketTest {
         KeyValueStatus status = client.nativeConnection().keyValueManagement().getStatus(BUCKET);
         assertThat(status.getMaxHistoryPerKey()).isEqualTo(EXTERNAL_HISTORY);
         assertThat(status.getDescription()).isEqualTo("externally created");
+    }
+
+    @Test
+    void expiresAfterFailsOpenOnABucketWithoutPerMessageTtl() {
+        // The external bucket does not allow per-message TTLs, so the server refuses TTL-carrying writes: the
+        // loaded value is still returned, just not cached (fail open), and the next read loads again.
+        NatsKvCacheImpl nats = (NatsKvCacheImpl) cache;
+        assertThat(nats.get("ttl", k -> "first", Duration.ofMinutes(1)).await().atMost(TIMEOUT)).isEqualTo("first");
+        assertThat(cache.get("ttl", k -> "second").await().atMost(TIMEOUT)).isEqualTo("second");
     }
 }

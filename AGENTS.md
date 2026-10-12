@@ -26,7 +26,7 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 
 ## Module map
 
-- `runtime/` — `NatsKvCacheImpl` (cache impl + stampede protection), `codec/` (`KeyCodec`: JSON+base64url keys; `ValueCodec`: `{exp, data}` JSON envelope), `NatsCachesBuildTimeConfig`, `NatsCacheBuildRecorder`.
+- `runtime/` — `NatsKvCacheImpl` (cache impl + stampede protection), `codec/` (`KeyCodec`: JSON+base64url keys; `ValueCodec`: `{data}` JSON envelope; `expiresAfter` is a server-side per-message TTL, not part of the payload), `NatsCachesBuildTimeConfig`, `NatsCacheBuildRecorder`.
 - `deployment/` — build steps: cache-manager info, native-image reflection registration (all app classes when any cache is `nats`-typed), and `BucketCollisionValidator` (build fails if two caches derive the same default bucket).
 - `integration-tests/` — smoke app (`src/main`) + `NatsKvCacheNativeIT`.
 
@@ -37,6 +37,7 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 - Per-cache backend selector is `quarkus.cache.<name>.type` (core cache extension), **not** `quarkus.cache.caches.<name>.type`. This extension's own properties are `quarkus.nats-cache.caches.<name>.*` (`bucket`, `ttl`, `history`).
 - `expiresAfter` overloads are not yet on `io.quarkus.cache.Cache` in Quarkus 3.40; they exist ahead of upstream as public methods on `NatsKvCacheImpl` with the exact upstream signatures. When upgrading Quarkus, check whether they landed upstream and convert them to overrides.
 - Pinned versions: Quarkus `3.40.0`, quarkiverse `reactive-messaging-nats-jetstream` `3.39.7` (not BOM-managed). Java target is 17 (`maven.compiler.release`) even though the toolchain here is Java 25.
+- `expiresAfter` writes bypass the quarkiverse `KeyValue.put` (no TTL parameter) and publish to `$KV.<bucket>.<key>` with a `Nats-TTL` header. Bucket provisioning uses raw JNats because the quarkiverse 3.40.x `KeyValueConfiguration` mapping drops `limitMarker`, the setting that enables `allow_msg_ttl` on a KV bucket. Needs NATS server 2.11+ (dev service runs 2.14).
 - Key encoding must be deterministic (ordered collections only) and fit 255 bytes; fail-fast validation at store time is intentional — don't move it to read time.
 
 ## Workflow notes

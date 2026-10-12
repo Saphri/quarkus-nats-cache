@@ -1,20 +1,28 @@
 package io.quarkiverse.nats.cache.runtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
+import io.nats.client.JetStream;
+import io.nats.client.KeyValueManagement;
+import io.nats.client.Message;
+import io.nats.client.PublishOptions;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
+import io.quarkiverse.reactive.messaging.nats.jetstream.client.connection.NativeConnection;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.KeyValue;
-import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.KeyValueManagement;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.api.KeyValueEntry;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.helpers.test.UniAssertSubscriber;
@@ -23,13 +31,17 @@ import io.smallrye.mutiny.subscription.UniEmitter;
 
 /**
  * Behaviour of the cache implementation against an in-memory fake of the quarkiverse KV client: fail-open
- * reads and writes, and stampede protection under cancellation. No NATS server needed.
+ * reads and writes, per-item expiration as a per-message TTL, and stampede protection under cancellation. No NATS
+ * server needed.
  */
 class NatsKvCacheImplTest {
 
     /** Map-backed KV whose reads and writes can be made to fail like an unreachable server. */
     static final class FakeKv {
         final Map<String, byte[]> entries = new ConcurrentHashMap<>();
+        /** TTL-carrying puts, which bypass the quarkiverse KV and are published to the key subject directly. */
+        final List<Message> ttlPublishes = new CopyOnWriteArrayList<>();
+        final List<PublishOptions> ttlPublishOptions = new CopyOnWriteArrayList<>();
         volatile boolean readsFail;
         volatile boolean writesFail;
 
@@ -54,15 +66,30 @@ class NatsKvCacheImplTest {
             KeyValue kv = keyValue();
             KeyValueManagement management = (KeyValueManagement) Proxy.newProxyInstance(getClass().getClassLoader(),
                     new Class<?>[] { KeyValueManagement.class }, (proxy, method, args) -> {
-                        if (method.getName().equals("addIfAbsent")) {
-                            return Uni.createFrom().voidItem();
+                        if (method.getName().equals("getBucketNames")) {
+                            return List.of("TEST"); // already provisioned
                         }
                         throw new UnsupportedOperationException(method.getName());
+                    });
+            JetStream jetStream = (JetStream) Proxy.newProxyInstance(getClass().getClassLoader(),
+                    new Class<?>[] { JetStream.class }, (proxy, method, args) -> {
+                        if (method.getName().equals("publishAsync") && args.length == 2) {
+                            ttlPublishes.add((Message) args[0]);
+                            ttlPublishOptions.add((PublishOptions) args[1]);
+                            return CompletableFuture.completedFuture(null);
+                        }
+                        throw new UnsupportedOperationException(method.getName());
+                    });
+            NativeConnection connection = (NativeConnection) Proxy.newProxyInstance(getClass().getClassLoader(),
+                    new Class<?>[] { NativeConnection.class }, (proxy, method, args) -> switch (method.getName()) {
+                        case "keyValueManagement" -> management;
+                        case "jetStream" -> jetStream;
+                        default -> throw new UnsupportedOperationException(method.getName());
                     });
             return (Client) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] { Client.class },
                     (proxy, method, args) -> switch (method.getName()) {
                         case "keyValue" -> kv;
-                        case "keyValueManagement" -> management;
+                        case "nativeConnection" -> connection;
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
         }
@@ -151,5 +178,35 @@ class NatsKvCacheImplTest {
 
         emitter[0].complete("value");
         winner.awaitItem(Duration.ofSeconds(5)).assertItem("value");
+    }
+
+    @Test
+    void expiresAfterIsPublishedAsAPerMessageTtl() {
+        assertThat(await(cache.<String, String> get("k", k -> "loaded", Duration.ofMinutes(5)))).isEqualTo("loaded");
+
+        assertThat(fake.entries).isEmpty(); // not written through the TTL-less quarkiverse put
+        assertThat(fake.ttlPublishes).singleElement().satisfies(m -> {
+            assertThat(m.getSubject()).startsWith("$KV.TEST.");
+            assertThat(new String(m.getData(), StandardCharsets.UTF_8)).isEqualTo("{\"data\":\"loaded\"}");
+        });
+        assertThat(fake.ttlPublishOptions).singleElement()
+                .satisfies(o -> assertThat(o.getMessageTtl()).isEqualTo("300s"));
+    }
+
+    @Test
+    void expiresAfterIsRoundedUpToWholeSeconds() {
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofSeconds(2))).isEqualTo("2s");
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofMillis(1))).isEqualTo("1s");
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofMillis(1500))).isEqualTo("2s");
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofDays(30))).isEqualTo("2592000s");
+        assertThat(NatsKvCacheImpl.messageTtlOf(null)).isNull();
+    }
+
+    @Test
+    void nonPositiveExpiresAfterIsRejected() {
+        assertThatThrownBy(() -> cache.get("k", k -> "v", Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> cache.get("k", k -> "v", Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }
