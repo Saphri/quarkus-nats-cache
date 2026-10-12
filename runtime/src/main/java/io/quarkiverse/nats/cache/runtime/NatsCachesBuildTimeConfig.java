@@ -1,6 +1,7 @@
 package io.quarkiverse.nats.cache.runtime;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -32,6 +33,14 @@ public interface NatsCachesBuildTimeConfig {
 
     /** Per-cache settings, keyed by cache name. Empty when no cache has NATS-specific settings. */
     Map<String, Cache> caches();
+
+    /**
+     * Extra package prefixes whose classes may be stored as cache keys or values, e.g. {@code com.acme.model}
+     * (sub-packages included). The application's own packages and the JDK value-type packages
+     * ({@code java.lang}, {@code java.util}, {@code java.time}, {@code java.math}) are always allowed; any other
+     * type id found in a stored entry is refused, because the bucket's contents are untrusted input.
+     */
+    Optional<List<String>> allowedPackages();
 
     interface Cache {
 
