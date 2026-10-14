@@ -70,15 +70,15 @@ public record NatsCacheInfo(String name, String bucket, Optional<Duration> ttl, 
     static final Duration LIMIT_MARKER_TTL = Duration.ofSeconds(1);
 
     /**
-     * The JNats {@code KeyValueConfiguration} used to provision this cache's bucket (add-if-absent, design D7).
+     * The quarkiverse {@code KeyValueConfiguration} used to provision this cache's bucket (add-if-absent, design D7).
      * Setting a limit marker is how a KV bucket enables per-message TTLs ({@code allow_msg_ttl}), which carry
      * per-item expiration (design D6); this requires NATS server 2.11 or later.
      */
-    public io.nats.client.api.KeyValueConfiguration keyValueConfiguration() {
+    public io.quarkiverse.reactive.messaging.nats.jetstream.client.store.configuration.KeyValueConfiguration keyValueConfiguration() {
         io.nats.client.api.KeyValueConfiguration.Builder builder = io.nats.client.api.KeyValueConfiguration.builder(bucket);
         ttl.ifPresent(builder::ttl);
         builder.maxHistoryPerKey(history);
         builder.limitMarker(LIMIT_MARKER_TTL);
-        return builder.build();
+        return io.quarkiverse.reactive.messaging.nats.jetstream.client.store.configuration.KeyValueConfiguration.of(builder.build());
     }
 }
