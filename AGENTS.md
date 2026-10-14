@@ -36,8 +36,8 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 - Project version is `999-SNAPSHOT` (Quarkiverse convention). The README's `1.0.0-SNAPSHOT` dependency snippet is stale — trust `pom.xml`.
 - Per-cache backend selector is `quarkus.cache.<name>.type` (core cache extension), **not** `quarkus.cache.caches.<name>.type`. This extension's own properties are `quarkus.nats-cache.caches.<name>.*` (`bucket`, `ttl`, `history`).
 - `expiresAfter` overloads are not yet on `io.quarkus.cache.Cache` in Quarkus 3.40; they exist ahead of upstream as public methods on `NatsKvCacheImpl` with the exact upstream signatures. When upgrading Quarkus, check whether they landed upstream and convert them to overrides.
-- Pinned versions: Quarkus `3.40.0`, quarkiverse `reactive-messaging-nats-jetstream` `3.39.7` (not BOM-managed). Java target is 17 (`maven.compiler.release`) even though the toolchain here is Java 25.
-- `expiresAfter` writes bypass the quarkiverse `KeyValue.put` (no TTL parameter) and publish to `$KV.<bucket>.<key>` with a `Nats-TTL` header. Bucket provisioning uses raw JNats because the quarkiverse 3.40.x `KeyValueConfiguration` mapping drops `limitMarker`, the setting that enables `allow_msg_ttl` on a KV bucket. Needs NATS server 2.11+ (dev service runs 2.14).
+- Pinned versions: Quarkus `3.40.0`, quarkiverse `reactive-messaging-nats-jetstream` `3.40.6` (not BOM-managed). Java target is 17 (`maven.compiler.release`) even though the toolchain here is Java 25.
+- `expiresAfter` writes bypass the quarkiverse `KeyValue.put` (no TTL parameter) and publish to `$KV.<bucket>.<key>` with a `Nats-TTL` header. Buckets are provisioned with a `limitMarker`, the setting that enables `allow_msg_ttl` on a KV bucket; quarkiverse ≥ 3.40.6 is required, since earlier versions dropped it in their `KeyValueConfiguration` mapping. Needs NATS server 2.11+ (dev service runs 2.14).
 - Key encoding must be deterministic (ordered collections only) and fit 255 bytes; fail-fast validation at store time is intentional — don't move it to read time.
 
 ## Workflow notes

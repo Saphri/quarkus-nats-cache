@@ -11,8 +11,6 @@ import java.util.function.Predicate;
 
 import org.jboss.logging.Logger;
 
-import io.nats.client.JetStreamApiException;
-import io.nats.client.KeyValueManagement;
 import io.nats.client.MessageTtl;
 import io.nats.client.PublishOptions;
 import io.nats.client.impl.NatsMessage;
@@ -290,19 +288,10 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         }
         synchronized (this) {
             if (bucketReady == null) {
-                // add-if-absent: an existing bucket (e.g. created externally) is left unmodified. Raw JNats rather
-                // than the quarkiverse KeyValueManagement: its configuration mapping (3.40.x) drops the limit marker,
-                // which is what enables per-message TTLs on the bucket.
-                CompletableFuture<Void> attempt = CompletableFuture.runAsync(() -> {
-                    try {
-                        KeyValueManagement kvm = client.nativeConnection().keyValueManagement();
-                        if (!kvm.getBucketNames().contains(info.bucket())) {
-                            kvm.create(info.keyValueConfiguration());
-                        }
-                    } catch (IOException | JetStreamApiException e) {
-                        throw new CacheException("Failed to provision NATS KV bucket '" + info.bucket() + "'", e);
-                    }
-                }, NatsCacheWorkers.EXECUTOR);
+                // add-if-absent: an existing bucket (e.g. created externally) is left unmodified.
+                CompletableFuture<Void> attempt = client.keyValueManagement()
+                        .addIfAbsent(info.keyValueConfiguration())
+                        .convert().toCompletableFuture();
                 attempt.whenComplete((v, error) -> {
                     if (error != null) {
                         bucketReady = null; // clear so the next cache operation retries provisioning

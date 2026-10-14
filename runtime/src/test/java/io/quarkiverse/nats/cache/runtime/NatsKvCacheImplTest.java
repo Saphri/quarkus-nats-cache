@@ -17,12 +17,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 import io.nats.client.JetStream;
-import io.nats.client.KeyValueManagement;
 import io.nats.client.Message;
 import io.nats.client.PublishOptions;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.connection.NativeConnection;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.KeyValue;
+import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.KeyValueManagement;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.api.KeyValueEntry;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.helpers.test.UniAssertSubscriber;
@@ -66,8 +66,8 @@ class NatsKvCacheImplTest {
             KeyValue kv = keyValue();
             KeyValueManagement management = (KeyValueManagement) Proxy.newProxyInstance(getClass().getClassLoader(),
                     new Class<?>[] { KeyValueManagement.class }, (proxy, method, args) -> {
-                        if (method.getName().equals("getBucketNames")) {
-                            return List.of("TEST"); // already provisioned
+                        if (method.getName().equals("addIfAbsent")) {
+                            return Uni.createFrom().voidItem();
                         }
                         throw new UnsupportedOperationException(method.getName());
                     });
@@ -82,13 +82,13 @@ class NatsKvCacheImplTest {
                     });
             NativeConnection connection = (NativeConnection) Proxy.newProxyInstance(getClass().getClassLoader(),
                     new Class<?>[] { NativeConnection.class }, (proxy, method, args) -> switch (method.getName()) {
-                        case "keyValueManagement" -> management;
                         case "jetStream" -> jetStream;
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
             return (Client) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] { Client.class },
                     (proxy, method, args) -> switch (method.getName()) {
                         case "keyValue" -> kv;
+                        case "keyValueManagement" -> management;
                         case "nativeConnection" -> connection;
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
@@ -113,14 +113,6 @@ class NatsKvCacheImplTest {
 
     private static <T> T await(Uni<T> uni) {
         return uni.await().atMost(Duration.ofSeconds(5));
-    }
-
-    /**
-     * Completes the (asynchronous) bucket provisioning up front, so that a subsequent {@code getAsync} reaches its
-     * loader synchronously on subscription and the test can drive the loader's emitter deterministically.
-     */
-    private void provisionBucket() {
-        await(cache.<String, String> get("warm-up", k -> "w"));
     }
 
     @Test
@@ -149,7 +141,6 @@ class NatsKvCacheImplTest {
 
     @Test
     void cancellingTheLoadingCallerDoesNotStrandWaiters() {
-        provisionBucket();
         AtomicInteger loads = new AtomicInteger();
         AtomicInteger cancellations = new AtomicInteger();
         UniEmitter<? super String>[] emitter = new UniEmitter[1];
@@ -176,7 +167,6 @@ class NatsKvCacheImplTest {
 
     @Test
     void cancellingAWaiterDoesNotAffectOtherCallers() {
-        provisionBucket();
         UniEmitter<? super String>[] emitter = new UniEmitter[1];
         java.util.function.Function<String, Uni<String>> loader = k -> Uni.createFrom().emitter(e -> emitter[0] = e);
 

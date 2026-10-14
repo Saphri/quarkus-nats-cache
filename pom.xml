@@ -51,7 +51,7 @@
     <quarkus.version>3.40.1</quarkus.version>
     <!-- Quarkiverse reactive-messaging-nats-jetstream extension (connection lifecycle,
          reactive KeyValue API, dev service, native-image delegates). -->
-    <version.io.quarkiverse.reactivemessaging.nats-jetstream>3.40.4</version.io.quarkiverse.reactivemessaging.nats-jetstream>
+    <version.io.quarkiverse.reactivemessaging.nats-jetstream>3.40.6</version.io.quarkiverse.reactivemessaging.nats-jetstream>
     <!-- Not managed by quarkus-bom; version matches the Quarkiverse parent POM. -->
     <assertj-core.version>3.27.7</assertj-core.version>
   </properties>
