@@ -9,16 +9,14 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
-import io.nats.client.JetStream;
-import io.nats.client.Message;
-import io.nats.client.PublishOptions;
+import io.nats.client.JetStreamApiException;
+import io.nats.client.MessageTtl;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.connection.NativeConnection;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.KeyValue;
@@ -30,8 +28,8 @@ import io.smallrye.mutiny.subscription.Cancellable;
 import io.smallrye.mutiny.subscription.UniEmitter;
 
 /**
- * Behaviour of the cache implementation against an in-memory fake of the quarkiverse KV client: fail-open
- * reads and writes, per-item expiration as a per-message TTL, and stampede protection under cancellation. No NATS
+ * Behaviour of the cache implementation against an in-memory fake of the KV clients: fail-open reads and writes,
+ * create-only writes, per-item expiration as a per-message TTL, and stampede protection under cancellation. No NATS
  * server needed.
  */
 class NatsKvCacheImplTest {
@@ -39,9 +37,9 @@ class NatsKvCacheImplTest {
     /** Map-backed KV whose reads and writes can be made to fail like an unreachable server. */
     static final class FakeKv {
         final Map<String, byte[]> entries = new ConcurrentHashMap<>();
-        /** TTL-carrying puts, which bypass the quarkiverse KV and are published to the key subject directly. */
-        final List<Message> ttlPublishes = new CopyOnWriteArrayList<>();
-        final List<PublishOptions> ttlPublishOptions = new CopyOnWriteArrayList<>();
+        /** The per-message TTL of each successful create, in order ({@code null} = no TTL). */
+        final List<MessageTtl> createTtls = new CopyOnWriteArrayList<>();
+        final List<String> purges = new CopyOnWriteArrayList<>();
         volatile boolean readsFail;
         volatile boolean writesFail;
 
@@ -50,12 +48,10 @@ class NatsKvCacheImplTest {
                     (proxy, method, args) -> switch (method.getName()) {
                         case "get" -> readsFail ? Uni.createFrom().failure(new IllegalStateException("connection lost"))
                                 : Uni.createFrom().item(entry((String) args[0], entries.get((String) args[0])));
-                        case "put" -> {
-                            if (writesFail) {
-                                yield Uni.createFrom().failure(new IllegalStateException("connection lost"));
-                            }
-                            entries.put((String) args[0], (byte[]) args[1]);
-                            yield Uni.createFrom().item(entry((String) args[0], (byte[]) args[1]));
+                        case "purge" -> {
+                            purges.add((String) args[0]);
+                            entries.remove((String) args[0]);
+                            yield Uni.createFrom().voidItem();
                         }
                         case "bucketName" -> "TEST";
                         default -> throw new UnsupportedOperationException(method.getName());
@@ -71,18 +67,25 @@ class NatsKvCacheImplTest {
                         }
                         throw new UnsupportedOperationException(method.getName());
                     });
-            JetStream jetStream = (JetStream) Proxy.newProxyInstance(getClass().getClassLoader(),
-                    new Class<?>[] { JetStream.class }, (proxy, method, args) -> {
-                        if (method.getName().equals("publishAsync") && args.length == 2) {
-                            ttlPublishes.add((Message) args[0]);
-                            ttlPublishOptions.add((PublishOptions) args[1]);
-                            return CompletableFuture.completedFuture(null);
+            // JNats KeyValue: writes are create-only, so an existing key is refused like the server does.
+            io.nats.client.KeyValue nativeKv = (io.nats.client.KeyValue) Proxy.newProxyInstance(
+                    getClass().getClassLoader(), new Class<?>[] { io.nats.client.KeyValue.class },
+                    (proxy, method, args) -> {
+                        if (!method.getName().equals("create") || args.length != 3) {
+                            throw new UnsupportedOperationException(method.getName());
                         }
-                        throw new UnsupportedOperationException(method.getName());
+                        if (writesFail) {
+                            throw new IllegalStateException("connection lost");
+                        }
+                        if (entries.putIfAbsent((String) args[0], (byte[]) args[1]) != null) {
+                            throw new WrongLastSequence();
+                        }
+                        createTtls.add((MessageTtl) args[2]);
+                        return (long) createTtls.size();
                     });
             NativeConnection connection = (NativeConnection) Proxy.newProxyInstance(getClass().getClassLoader(),
                     new Class<?>[] { NativeConnection.class }, (proxy, method, args) -> switch (method.getName()) {
-                        case "jetStream" -> jetStream;
+                        case "keyValue" -> nativeKv;
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
             return (Client) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] { Client.class },
@@ -104,6 +107,18 @@ class NatsKvCacheImplTest {
                         case "value" -> Optional.of(value);
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
+        }
+    }
+
+    /** What the server answers to a create on an existing key (JNats has no public constructor for its Error). */
+    static final class WrongLastSequence extends JetStreamApiException {
+        WrongLastSequence() {
+            super(io.nats.client.api.Error.JsBadRequestErr);
+        }
+
+        @Override
+        public int getApiErrorCode() {
+            return 10071;
         }
     }
 
@@ -130,12 +145,13 @@ class NatsKvCacheImplTest {
     }
 
     @Test
-    void undecodableEntryIsReloadedAndOverwritten() {
+    void undecodableEntryIsPurgedAndReplaced() {
         assertThat(await(cache.<String, String> get("k", k -> "first"))).isEqualTo("first");
         String stored = fake.entries.keySet().iterator().next();
         fake.entries.put(stored, "{\"data\":{\"@class\":\"com.example.Gadget\"}}".getBytes(StandardCharsets.UTF_8));
 
         assertThat(await(cache.<String, String> get("k", k -> "reloaded"))).isEqualTo("reloaded");
+        assertThat(fake.purges).containsExactly(stored); // dropped first: entries are never overwritten in place
         assertThat(await(cache.<String, String> get("k", k -> "not called"))).isEqualTo("reloaded");
     }
 
@@ -181,16 +197,27 @@ class NatsKvCacheImplTest {
     }
 
     @Test
-    void expiresAfterIsPublishedAsAPerMessageTtl() {
+    void expiresAfterIsWrittenAsAPerMessageTtl() {
         assertThat(await(cache.<String, String> get("k", k -> "loaded", Duration.ofMinutes(5)))).isEqualTo("loaded");
+        assertThat(await(cache.<String, String> get("plain", k -> "loaded"))).isEqualTo("loaded");
 
-        assertThat(fake.entries).isEmpty(); // not written through the TTL-less quarkiverse put
-        assertThat(fake.ttlPublishes).singleElement().satisfies(m -> {
-            assertThat(m.getSubject()).startsWith("$KV.TEST.");
-            assertThat(new String(m.getData(), StandardCharsets.UTF_8)).isEqualTo("{\"data\":\"loaded\"}");
-        });
-        assertThat(fake.ttlPublishOptions).singleElement()
-                .satisfies(o -> assertThat(o.getMessageTtl()).isEqualTo("300s"));
+        assertThat(fake.createTtls).hasSize(2);
+        assertThat(fake.createTtls.get(0).getTtlString()).isEqualTo("300s");
+        assertThat(fake.createTtls.get(1)).isNull(); // no expiresAfter → no per-message TTL
+        assertThat(fake.entries.values()).allSatisfy(
+                v -> assertThat(new String(v, StandardCharsets.UTF_8)).isEqualTo("{\"data\":\"loaded\"}"));
+    }
+
+    @Test
+    void anEntryCachedByAnotherWriterIsNotOverwritten() {
+        // Another instance cached the key between this instance's miss and its write: first write wins, and the
+        // loaded value is still returned.
+        assertThat(await(cache.<String, String> get("k", k -> "first"))).isEqualTo("first");
+        byte[] stored = fake.entries.values().iterator().next();
+        fake.readsFail = true; // force this instance down the miss → load → create path
+
+        assertThat(await(cache.<String, String> get("k", k -> "second"))).isEqualTo("second");
+        assertThat(fake.entries.values()).containsExactly(stored);
     }
 
     @Test

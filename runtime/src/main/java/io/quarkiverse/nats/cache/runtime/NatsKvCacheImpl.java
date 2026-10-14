@@ -1,5 +1,7 @@
 package io.quarkiverse.nats.cache.runtime;
 
+import static io.nats.client.support.NatsJetStreamConstants.JS_WRONG_LAST_SEQUENCE;
+
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
@@ -11,10 +13,10 @@ import java.util.function.Predicate;
 
 import org.jboss.logging.Logger;
 
+import io.nats.client.JetStreamApiException;
 import io.nats.client.MessageTtl;
-import io.nats.client.PublishOptions;
-import io.nats.client.impl.NatsMessage;
 import io.nats.client.support.NatsKeyValueUtil;
+import io.quarkiverse.nats.cache.runtime.codec.CacheValueException;
 import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
 import io.quarkiverse.nats.cache.runtime.codec.ValueCodec;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
@@ -24,6 +26,7 @@ import io.quarkus.cache.Cache;
 import io.quarkus.cache.CacheException;
 import io.quarkus.cache.runtime.AbstractCache;
 import io.smallrye.mutiny.Uni;
+import io.smallrye.mutiny.unchecked.Unchecked;
 
 /**
  * Implementation of the Quarkus cache API backed by a NATS JetStream KV bucket (design D1–D8).
@@ -34,6 +37,9 @@ import io.smallrye.mutiny.Uni;
  * Concurrent loads of the same key share a single loader execution via the in-flight map (design D3). The loaded
  * value is stored with the universal envelope ({@code {data}}), so cached {@code null} results round-trip
  * losslessly.
+ *
+ * <p>Writes only ever create an entry (first write wins); an unreadable entry is purged before its reload is
+ * stored.
  *
  * <p>Per-item expiration (design D6): {@code expiresAfter} is written as a server-side per-message TTL
  * ({@code Nats-TTL} header), so the server removes the entry when it elapses. NATS TTLs have whole-second
@@ -53,8 +59,8 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     private final KeyValue kv;
     private final Client client;
 
-    /** Subject prefix of this cache's keys ({@code $KV.<bucket>.}), for TTL-carrying puts. */
-    private final String keySubject;
+    /** JNats view of the bucket, for creates (see {@link #nativeKv()}). */
+    private volatile io.nats.client.KeyValue nativeKv;
 
     /**
      * In-flight loader per encoded key (design D3): concurrent loads of the same key share one execution.
@@ -69,7 +75,6 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         this.info = Objects.requireNonNull(info, "info must not be null");
         this.client = Objects.requireNonNull(client, "client must not be null");
         this.kv = client.keyValue(info.bucket());
-        this.keySubject = NatsKeyValueUtil.toKeyPrefix(info.bucket());
     }
 
     @Override
@@ -125,6 +130,12 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
                             LOGGER.warnf("NATS KV cache [%s]: read failed, falling back to the value loader: %s",
                                     info.name(), failure.toString());
                         }
+                        if (failure instanceof CacheValueException) {
+                            // Entries are only created, never overwritten: drop the unreadable entry first so the
+                            // reloaded value can take its place. A failed purge just leaves the value uncached.
+                            return kv.purge(encoded).onFailure().recoverWithNull()
+                                    .chain(() -> loadAndStore(key, encoded, loader, messageTtl));
+                        }
                         return loadAndStore(key, encoded, loader, messageTtl);
                     })
                     .map(v -> (V) v); // unchecked: V is the caller's static type of the cached value
@@ -134,7 +145,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     private Uni<Object> readEntry(KeyValueEntry entry) {
         byte[] payload = entry.value().orElse(null);
         if (payload == null || payload.length == 0) {
-            throw new CacheMiss(); // empty payload (tombstone or foreign data) → miss
+            throw new CacheValueException("Stored cache value is empty"); // foreign data → unreadable
         }
         ValueCodec.Envelope envelope = ValueCodec.decode(payload); // undecodable → CacheValueException → reload
         return Uni.createFrom().item(envelope.data()); // null item = cached-null result → suppresses the loader
@@ -194,10 +205,12 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         // Encoding errors are programming errors (unserializable value) and fail the call; a failed write is a
         // cache outage and does not (fail open): the loaded value is returned, just not cached.
         byte[] payload = ValueCodec.encode(value);
-        Uni<?> write = messageTtl == null ? kv.put(encoded, payload) : putWithTtl(encoded, payload, messageTtl);
-        return write
+        return create(encoded, payload, messageTtl)
                 .onItemOrFailure().transform((ignored, failure) -> {
-                    if (failure != null) {
+                    if (isAlreadyCached(failure)) {
+                        // Another writer (typically another instance) cached the key first: first write wins.
+                        LOGGER.debugf("NATS KV cache [%s]: entry already cached by another writer", info.name());
+                    } else if (failure != null) {
                         LOGGER.warnf("NATS KV cache [%s]: write failed, returning the loaded value uncached: %s",
                                 info.name(), failure.toString());
                     }
@@ -206,20 +219,30 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     }
 
     /**
-     * A KV put carrying a per-message TTL (design D6). The quarkiverse {@code KeyValue} API has no TTL-aware put and
-     * JNats only offers one on {@code create} (which refuses existing keys), so this publishes to the key's subject
-     * directly, which is exactly what a KV put is, with the {@code Nats-TTL} header added.
+     * Writes a new entry, optionally with a per-message TTL (design D6). Entries are only ever created, never
+     * updated: a live entry is kept until it expires or is invalidated, so a write for a key that already holds a
+     * value is refused (first write wins). JNats' {@code create} also succeeds over a delete or purge marker, which
+     * covers expired and invalidated keys. The quarkiverse {@code KeyValue} has no TTL-aware write, so this uses the
+     * JNats {@code KeyValue} (blocking → worker pool).
      */
-    private Uni<?> putWithTtl(String encoded, byte[] payload, MessageTtl messageTtl) {
-        return Uni.createFrom().deferred(() -> {
-            try {
-                return Uni.createFrom().completionStage(client.nativeConnection().jetStream().publishAsync(
-                        NatsMessage.builder().subject(keySubject + encoded).data(payload).build(),
-                        PublishOptions.builder().messageTtl(messageTtl).build()));
-            } catch (IOException e) {
-                return Uni.createFrom().failure(e);
-            }
-        });
+    private Uni<Long> create(String encoded, byte[] payload, MessageTtl messageTtl) {
+        return Uni.createFrom().item(Unchecked.supplier(() -> nativeKv().create(encoded, payload, messageTtl)))
+                .runSubscriptionOn(NatsCacheWorkers.EXECUTOR);
+    }
+
+    private static boolean isAlreadyCached(Throwable failure) {
+        Throwable cause = failure != null && !(failure instanceof JetStreamApiException) ? failure.getCause() : failure;
+        return cause instanceof JetStreamApiException e && e.getApiErrorCode() == JS_WRONG_LAST_SEQUENCE;
+    }
+
+    /** The JNats {@code KeyValue} for this bucket; created lazily, since creating one queries the stream. */
+    private io.nats.client.KeyValue nativeKv() throws IOException {
+        io.nats.client.KeyValue n = nativeKv;
+        if (n == null) {
+            n = client.nativeConnection().keyValue(info.bucket());
+            nativeKv = n; // benign race: concurrent first writers may each create one
+        }
+        return n;
     }
 
     // ------------------------------------------------------------------ invalidation
