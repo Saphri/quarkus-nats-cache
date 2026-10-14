@@ -96,6 +96,18 @@ class NatsCacheMixedBackendTest {
         // headroom for the server's expiry sweep, which can lag the TTL by up to about a second.
         Thread.sleep(3500);
         assertThat(natsCache.get("exp", k -> "third").await().atMost(TIMEOUT)).isEqualTo("third");
+        // The reload was cached again (created over the expired entry's marker), not just returned.
+        assertThat(natsCache.get("exp", k -> "fourth").await().atMost(TIMEOUT)).isEqualTo("third");
+    }
+
+    @Test
+    void unreadableEntryIsReplaced() throws Exception {
+        // Writes are create-only, so an unreadable entry must be purged before its reload can be cached.
+        client.nativeConnection().keyValue(NATS_BUCKET)
+                .put(io.quarkiverse.nats.cache.runtime.codec.KeyCodec.encode("corrupt"), "not an envelope".getBytes());
+
+        assertThat(natsCache.get("corrupt", k -> "reloaded").await().atMost(TIMEOUT)).isEqualTo("reloaded");
+        assertThat(natsCache.get("corrupt", k -> "NOT CALLED").await().atMost(TIMEOUT)).isEqualTo("reloaded");
     }
 
     @Test

@@ -187,8 +187,12 @@ runtime class** with all fields preserved — POJOs, nested objects, collections
 and `null` results are cached (the loader is not re-invoked while the sentinel is present).
 
 Entries written by an older version of a class still decode after a deploy: unknown properties are ignored.
-An entry that cannot be decoded at all (for example after a class was renamed or moved) is treated as a miss
-and overwritten with a freshly loaded value.
+An entry that cannot be decoded at all (for example after a class was renamed or moved) is treated as a miss:
+it is purged and replaced with a freshly loaded value.
+
+Entries are only ever *created*, never updated in place: a cached value stays until it expires or is
+invalidated. When two application instances miss the same key at the same moment, the first write wins and the
+other instance returns its own loaded value without caching it.
 
 A practical bonus: because values are readable JSON, you can inspect them directly from the NATS CLI
 (see [Debugging](#debugging-with-the-nats-cli)). Keys are opaque base64url by design; values are where the
