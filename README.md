@@ -20,14 +20,14 @@ and native-image support all come from there.
 - Fails open: if NATS is unreachable or an entry cannot be decoded, the loader runs and its value is returned,
   so a cache problem costs latency rather than failing the cached method
 - Full invalidation surface: single key, all keys, predicate-based
-- Per-item expiration (`expiresAfter`) as a logical TTL under the bucket-TTL ceiling (see [Expiration](#expiration))
+- Per-item expiration (`expiresAfter`) as a server-side per-message TTL under the bucket-TTL ceiling (see [Expiration](#expiration))
 - Zero-config local development and testing via the inherited NATS JetStream dev service (Docker)
 - GraalVM native image support
 
 ## Requirements
 
 - Quarkus **3.40.x** or later (tested against 3.40.0)
-- A running NATS server with JetStream enabled in production; in `dev`/`test` modes a
+- A running NATS server **2.11 or later** (per-message TTL support) with JetStream enabled in production; in `dev`/`test` modes a
   [Docker](https://www.docker.com/) container is started automatically when no server is configured
 
 ## Getting started
@@ -187,8 +187,12 @@ runtime class** with all fields preserved — POJOs, nested objects, collections
 and `null` results are cached (the loader is not re-invoked while the sentinel is present).
 
 Entries written by an older version of a class still decode after a deploy: unknown properties are ignored.
-An entry that cannot be decoded at all (for example after a class was renamed or moved) is treated as a miss
-and overwritten with a freshly loaded value.
+An entry that cannot be decoded at all (for example after a class was renamed or moved) is treated as a miss:
+it is purged and replaced with a freshly loaded value.
+
+Entries are only ever *created*, never updated in place: a cached value stays until it expires or is
+invalidated. When two application instances miss the same key at the same moment, the first write wins and the
+other instance returns its own loaded value without caching it.
 
 A practical bonus: because values are readable JSON, you can inspect them directly from the NATS CLI
 (see [Debugging](#debugging-with-the-nats-cli)). Keys are opaque base64url by design; values are where the
@@ -199,12 +203,22 @@ debugging value lives.
 Two layers of TTL apply:
 
 1. **Bucket TTL (hard ceiling)** — `quarkus.nats-cache.caches.<name>.ttl`, enforced server-side per entry and
-   reset on every write. Entries stored without a per-item duration are governed solely by this ceiling.
-2. **Per-item logical TTL** — `get(key, loader, expiresAfter)` stores the entry with a logical expiration of
-   `expiresAfter`. Reads before expiration return the stored value; reads after expiration invoke the loader
-   and overwrite the entry. The async overload `getAsync(key, asyncLoader, expiresAfter)` has identical
-   semantics. A logically expired entry is treated as a miss on read (it lingers in the bucket until
-   overwritten or reaped by the bucket TTL — bounded staleness, invisible to readers).
+   reset on every write. Entries stored without a per-item duration are governed solely by this ceiling (they
+   carry the longest per-message TTL NATS clients accept, about 68 years, which the bucket TTL undercuts).
+2. **Per-item TTL** — `get(key, loader, expiresAfter)` writes the entry with a NATS per-message TTL
+   (`Nats-TTL` header) of `expiresAfter`. Reads before expiration return the stored value; once it elapses the
+   server deletes the entry, so the next read is a miss that invokes the loader. The async overload
+   `getAsync(key, asyncLoader, expiresAfter)` has identical semantics. Expiry is enforced by the server's
+   clock, not the application's, and expired entries do not linger in the bucket.
+
+NATS TTLs have whole-second granularity, so `expiresAfter` is rounded **up** to the next second (an entry never
+expires early), and the server's expiry sweep can trail the deadline by up to about a second.
+
+Per-message TTLs must be allowed on the bucket. Buckets the extension creates allow them (it sets a one-second
+limit marker, which is how a KV bucket enables `allow_msg_ttl`). A pre-existing bucket created without them is
+left unmodified; since every entry is written with a TTL, the server rejects all writes to it, which fail open:
+the loaded value is returned but not cached, and a warning is logged. To cache there, recreate the bucket with a
+limit marker TTL, or let the extension create it.
 
 The effective lifetime of any entry never exceeds the bucket TTL.
 
@@ -234,6 +248,11 @@ Uni<Forecast> f = weather.get(city, this::callWeatherApi, Duration.ofMinutes(5))
 
 After any invalidation, the next read for an affected key is a miss and re-invokes the loader.
 
+Single-key purges (`invalidate`, `invalidateIf`) leave a purge marker that carries a one-second TTL, so the
+server removes the marker too and invalidated keys leave nothing behind. On a pre-existing bucket without
+per-message TTL support the extension falls back to a plain purge, whose marker stays until the key is written
+again or the bucket TTL removes it.
+
 ## Native image
 
 The extension supports GraalVM native execution (verified with a native smoke test covering put, get-hit,
@@ -258,8 +277,9 @@ nats kv history WEATHER_CACHE <key>         # revision history (when history > 1
 nats kv purge WEATHER_CACHE                 # drop everything (same effect as invalidateAll)
 ```
 
-The stored payload is an envelope `{ "exp": <epoch-millis?>, "data": <typed value> }`: `exp` is present only
-for entries written with a per-item duration, and `data` is `null` for cached null results.
+The stored payload is an envelope `{ "data": <typed value> }`, where `data` is `null` for cached null results.
+Every entry carries a `Nats-TTL` header (the per-item duration, or about 68 years without one) (`nats kv get` doesn't show headers;
+`nats stream get KV_<bucket> --last-for '$KV.<bucket>.<key>'` does).
 
 ## Limitations
 

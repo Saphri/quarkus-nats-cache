@@ -20,7 +20,7 @@ import io.nats.client.api.KeyValueStatus;
  * Spec scenario "Bucket auto-created with TTL": the application starts with
  * {@code quarkus.nats-cache.caches.ttlcheck.ttl=2h} and no existing bucket → a bucket is created whose entries
  * expire after two hours (the configured bucket-level TTL is applied by the extension's add-if-absent
- * provisioning, design D7).
+ * provisioning, design D7), alongside per-message TTL support for per-item expiration (design D6).
  */
 @QuarkusTest
 class NatsCacheTtlTest {
@@ -58,5 +58,7 @@ class NatsCacheTtlTest {
         KeyValueStatus status = client.nativeConnection().keyValueManagement().getStatus(BUCKET);
         assertThat(status.getBucketName()).isEqualTo(BUCKET);
         assertThat(status.getTtl()).isEqualTo(CONFIGURED_TTL); // the extension's TTL was applied at creation
+        // Per-message TTLs (which carry expiresAfter) are enabled on every bucket the extension provisions.
+        assertThat(status.getBackingStreamInfo().getConfiguration().isAllowMessageTtl()).isTrue();
     }
 }

@@ -110,7 +110,7 @@ class ValueCodecTest {
     @Test
     void pojoValuesPreserveExactRuntimeClass() {
         Order order = new Order("o-1", List.of(new Item("sku-1", 2), new Item("sku-2", 5)));
-        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode(order, null));
+        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode(order));
         assertThat(env.data()).isInstanceOf(Order.class).isEqualTo(order);
         // nested elements keep their concrete types
         List<?> items = ((Order) env.data()).getItems();
@@ -119,29 +119,29 @@ class ValueCodecTest {
 
     @Test
     void scalarAndCollectionValuesRoundTrip() {
-        assertThat(ValueCodec.decode(ValueCodec.encode("hello", null)).data()).isEqualTo("hello");
-        assertThat(ValueCodec.decode(ValueCodec.encode(42, null)).data()).isEqualTo(42).isInstanceOf(Integer.class);
-        assertThat(ValueCodec.decode(ValueCodec.encode(42L, null)).data()).isInstanceOf(Long.class);
-        assertThat(ValueCodec.decode(ValueCodec.encode(1.5d, null)).data()).isEqualTo(1.5d);
-        assertThat(ValueCodec.decode(ValueCodec.encode(Boolean.FALSE, null)).data()).isEqualTo(Boolean.FALSE);
+        assertThat(ValueCodec.decode(ValueCodec.encode("hello")).data()).isEqualTo("hello");
+        assertThat(ValueCodec.decode(ValueCodec.encode(42)).data()).isEqualTo(42).isInstanceOf(Integer.class);
+        assertThat(ValueCodec.decode(ValueCodec.encode(42L)).data()).isInstanceOf(Long.class);
+        assertThat(ValueCodec.decode(ValueCodec.encode(1.5d)).data()).isEqualTo(1.5d);
+        assertThat(ValueCodec.decode(ValueCodec.encode(Boolean.FALSE)).data()).isEqualTo(Boolean.FALSE);
 
         List<String> list = List.of("a", "b");
-        assertThat(ValueCodec.decode(ValueCodec.encode(list, null)).data()).isEqualTo(list);
+        assertThat(ValueCodec.decode(ValueCodec.encode(list)).data()).isEqualTo(list);
 
         Map<String, Object> map = new java.util.LinkedHashMap<>();
         map.put("n", 1);
         map.put("s", "x");
-        assertThat(ValueCodec.decode(ValueCodec.encode(map, null)).data()).isEqualTo(map);
+        assertThat(ValueCodec.decode(ValueCodec.encode(map)).data()).isEqualTo(map);
     }
 
     @Test
     void valueResemblingEnvelopeRoundTripsUnambiguously() {
-        // A user value whose JSON shape mimics the envelope ({@code data}/{@code exp} members) must not be
+        // A user value whose JSON shape mimics the envelope ({@code data} member) must not be
         // confused with an actual envelope: it is embedded as the typed encoding of the {@code data} member.
         Map<String, Object> value = new java.util.LinkedHashMap<>();
         value.put("data", "x");
-        value.put("exp", 123L);
-        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode(value, null));
+        value.put("other", 123L);
+        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode(value));
         assertThat(env.data()).isEqualTo(value);
     }
 
@@ -149,52 +149,12 @@ class ValueCodecTest {
 
     @Test
     void cachedNullIsStoredAsDataNullEnvelope() {
-        byte[] payload = ValueCodec.encode(null, null);
+        byte[] payload = ValueCodec.encode(null);
         String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
         assertThat(json).contains("\"data\":null");
 
         ValueCodec.Envelope env = ValueCodec.decode(payload);
         assertThat(env.data()).isNull();
-        assertThat(env.expiresAtEpochMillis()).isNull();
-        assertThat(env.isExpired(System.currentTimeMillis())).isFalse();
-    }
-
-    @Test
-    void cachedNullWithExpirationIsStillDistinguishableFromMiss() {
-        long now = System.currentTimeMillis();
-        ValueCodec.Envelope live = ValueCodec.decode(ValueCodec.encode(null, now + 60_000));
-        assertThat(live.data()).isNull();
-        assertThat(live.isExpired(now)).isFalse();
-
-        ValueCodec.Envelope stale = ValueCodec.decode(ValueCodec.encode(null, now - 1));
-        assertThat(stale.data()).isNull();
-        assertThat(stale.isExpired(now)).isTrue();
-    }
-
-    // --- logical TTL (exp) ------------------------------------------------------
-
-    @Test
-    void liveEnvelopeIsNotExpired() {
-        long now = System.currentTimeMillis();
-        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode("v", now + 60_000));
-        assertThat(env.expiresAtEpochMillis()).isEqualTo(now + 60_000);
-        assertThat(env.isExpired(now)).isFalse();
-    }
-
-    @Test
-    void expiredEnvelopeIsDetected() {
-        long now = System.currentTimeMillis();
-        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode("v", now - 1));
-        assertThat(env.isExpired(now)).isTrue();
-    }
-
-    @Test
-    void envelopeWithoutExpNeverExpires() {
-        long now = System.currentTimeMillis();
-        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode("v", null));
-        assertThat(env.expiresAtEpochMillis()).isNull();
-        assertThat(env.isExpired(now)).isFalse();
-        assertThat(env.isExpired(Long.MAX_VALUE)).isFalse();
     }
 
     // --- unknown / legacy payloads ---------------------------------------------
@@ -225,13 +185,5 @@ class ValueCodecTest {
     void nullPayloadFailsCleanly() {
         assertThatThrownBy(() -> ValueCodec.decode(null))
                 .isInstanceOf(CacheValueException.class);
-    }
-
-    @Test
-    void nonNumericExpFailsCleanly() {
-        byte[] payload = "{\"exp\":\"soon\",\"data\":1}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        assertThatThrownBy(() -> ValueCodec.decode(payload))
-                .isInstanceOf(CacheValueException.class)
-                .hasMessageContaining("exp");
     }
 }
