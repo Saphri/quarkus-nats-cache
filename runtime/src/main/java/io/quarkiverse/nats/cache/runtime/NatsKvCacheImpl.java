@@ -2,7 +2,6 @@ package io.quarkiverse.nats.cache.runtime;
 
 import static io.nats.client.support.NatsJetStreamConstants.JS_WRONG_LAST_SEQUENCE;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
@@ -25,7 +24,6 @@ import io.quarkus.cache.Cache;
 import io.quarkus.cache.CacheException;
 import io.quarkus.cache.runtime.AbstractCache;
 import io.smallrye.mutiny.Uni;
-import io.smallrye.mutiny.unchecked.Unchecked;
 
 /**
  * Implementation of the Quarkus cache API backed by a NATS JetStream KV bucket (design D1–D8).
@@ -42,9 +40,10 @@ import io.smallrye.mutiny.unchecked.Unchecked;
  *
  * <p>Per-item expiration (design D6): {@code expiresAfter} is written as a server-side per-message TTL
  * ({@code Nats-TTL} header), so the server removes the entry when it elapses. NATS TTLs have whole-second
- * granularity: durations are rounded up to the next second. Buckets provisioned by this extension allow
- * per-message TTLs; a pre-existing bucket that does not rejects such writes, which fail open (the loaded value is
- * returned uncached).
+ * granularity: durations are rounded up to the next second. Entries without {@code expiresAfter} carry the
+ * longest TTL the client accepts (about 68 years). Buckets provisioned by this extension allow per-message TTLs; a
+ * pre-existing bucket that does not rejects every write, and writes fail open (the loaded value is returned
+ * uncached).
  *
  * <p>Invalidation: {@code invalidate(key)} purges the key (including its history); {@code invalidateAll()} purges
  * the whole KV stream through raw JNats; {@code invalidateIf(predicate)} streams the bucket's keys, decodes each
@@ -63,9 +62,6 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
 
     /** Lifetime of the marker a purge leaves behind (the server minimum). */
     static final Duration PURGE_MARKER_TTL = Duration.ofSeconds(1);
-
-    /** JNats view of the bucket, for TTL-less creates (see {@link #nativeKv()}). */
-    private volatile io.nats.client.KeyValue nativeKv;
 
     /**
      * In-flight loader per encoded key (design D3): concurrent loads of the same key share one execution.
@@ -227,15 +223,12 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
      * updated: a live entry is kept until it expires or is invalidated, so a write for a key that already holds a
      * value is refused (first write wins). A create also succeeds over a delete, purge or expiry marker, which covers
      * expired and invalidated keys.
+     *
+     * <p>The quarkiverse KeyValue only offers create with a TTL, so an entry without {@code expiresAfter} is written
+     * with the longest TTL the client accepts; the bucket's own max age (if any) still applies.
      */
     private Uni<?> create(String encoded, byte[] payload, Duration messageTtl) {
-        if (messageTtl != null) {
-            return kv.create(encoded, payload, messageTtl);
-        }
-        // The quarkiverse KeyValue only offers create with a TTL; a TTL-less create goes through JNats (blocking →
-        // worker pool).
-        return Uni.createFrom().item(Unchecked.supplier(() -> nativeKv().create(encoded, payload)))
-                .runSubscriptionOn(NatsCacheWorkers.EXECUTOR);
+        return kv.create(encoded, payload, messageTtl != null ? messageTtl : MAX_TTL);
     }
 
     private static boolean isAlreadyCached(Throwable failure) {
@@ -245,16 +238,6 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
             }
         }
         return false;
-    }
-
-    /** The JNats {@code KeyValue} for this bucket; created lazily, since creating one queries the stream. */
-    private io.nats.client.KeyValue nativeKv() throws IOException {
-        io.nats.client.KeyValue n = nativeKv;
-        if (n == null) {
-            n = client.nativeConnection().keyValue(info.bucket());
-            nativeKv = n; // benign race: concurrent first writers may each create one
-        }
-        return n;
     }
 
     /**

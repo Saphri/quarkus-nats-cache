@@ -2,6 +2,7 @@ package io.quarkiverse.nats.cache.deployment;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
 import jakarta.inject.Inject;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.quarkiverse.nats.cache.runtime.NatsKvCacheImpl;
+import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkus.cache.Cache;
 import io.quarkus.cache.CacheName;
@@ -56,30 +58,36 @@ class NatsCachePreExistingBucketTest {
 
     @Test
     void preExistingBucketIsUsedUnmodified() throws Exception {
-        // The cache works against the externally created bucket...
+        // The cache works against the externally created bucket (fail open: the loaded value is returned)...
         assertThat(cache.get("k", k -> "v").await().atMost(TIMEOUT)).isEqualTo("v");
-        assertThat(cache.get("k", k -> "SHOULD-NOT-RUN").await().atMost(TIMEOUT)).isEqualTo("v");
 
         // ...and its configuration survived the extension's add-if-absent provisioning.
         KeyValueStatus status = client.nativeConnection().keyValueManagement().getStatus(BUCKET);
         assertThat(status.getMaxHistoryPerKey()).isEqualTo(EXTERNAL_HISTORY);
         assertThat(status.getDescription()).isEqualTo("externally created");
+        assertThat(status.getBackingStreamInfo().getConfiguration().isAllowMessageTtl()).isFalse();
     }
 
     @Test
-    void invalidationWorksOnABucketWithoutPerMessageTtl() {
-        // The purge with a marker TTL is refused here; invalidation falls back to a plain purge.
-        assertThat(cache.get("inv", k -> "first").await().atMost(TIMEOUT)).isEqualTo("first");
-        cache.invalidate("inv").await().atMost(TIMEOUT);
-        assertThat(cache.get("inv", k -> "second").await().atMost(TIMEOUT)).isEqualTo("second");
-    }
-
-    @Test
-    void expiresAfterFailsOpenOnABucketWithoutPerMessageTtl() {
-        // The external bucket does not allow per-message TTLs, so the server refuses TTL-carrying writes: the
-        // loaded value is still returned, just not cached (fail open), and the next read loads again.
+    void writesFailOpenOnABucketWithoutPerMessageTtl() {
+        // Every entry is written with a per-message TTL (the maximum one when no expiresAfter is given), which the
+        // external bucket does not allow: the loaded value is still returned, just not cached, so the next read
+        // loads again.
         NatsKvCacheImpl nats = (NatsKvCacheImpl) cache;
         assertThat(nats.get("ttl", k -> "first", Duration.ofMinutes(1)).await().atMost(TIMEOUT)).isEqualTo("first");
         assertThat(cache.get("ttl", k -> "second").await().atMost(TIMEOUT)).isEqualTo("second");
+        assertThat(cache.get("ttl", k -> "third").await().atMost(TIMEOUT)).isEqualTo("third");
+    }
+
+    @Test
+    void invalidationWorksOnABucketWithoutPerMessageTtl() throws Exception {
+        // An entry written by someone else (this extension cannot write here): the purge with a marker TTL is
+        // refused, and invalidation falls back to a plain purge.
+        var kv = client.nativeConnection().keyValue(BUCKET);
+        kv.put(KeyCodec.encode("inv"), "{\"data\":\"external\"}".getBytes(StandardCharsets.UTF_8));
+        assertThat(cache.get("inv", k -> "loaded").await().atMost(TIMEOUT)).isEqualTo("external");
+
+        cache.invalidate("inv").await().atMost(TIMEOUT);
+        assertThat(kv.get(KeyCodec.encode("inv"))).isNull();
     }
 }

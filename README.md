@@ -203,7 +203,8 @@ debugging value lives.
 Two layers of TTL apply:
 
 1. **Bucket TTL (hard ceiling)** — `quarkus.nats-cache.caches.<name>.ttl`, enforced server-side per entry and
-   reset on every write. Entries stored without a per-item duration are governed solely by this ceiling.
+   reset on every write. Entries stored without a per-item duration are governed solely by this ceiling (they
+   carry the longest per-message TTL NATS clients accept, about 68 years, which the bucket TTL undercuts).
 2. **Per-item TTL** — `get(key, loader, expiresAfter)` writes the entry with a NATS per-message TTL
    (`Nats-TTL` header) of `expiresAfter`. Reads before expiration return the stored value; once it elapses the
    server deletes the entry, so the next read is a miss that invokes the loader. The async overload
@@ -215,9 +216,9 @@ expires early), and the server's expiry sweep can trail the deadline by up to ab
 
 Per-message TTLs must be allowed on the bucket. Buckets the extension creates allow them (it sets a one-second
 limit marker, which is how a KV bucket enables `allow_msg_ttl`). A pre-existing bucket created without them is
-left unmodified; the server rejects TTL writes to it, which fail open: the loaded value is returned but not
-cached, and a warning is logged. To cache `expiresAfter` entries there, recreate the bucket with a limit
-marker TTL, or let the extension create it.
+left unmodified; since every entry is written with a TTL, the server rejects all writes to it, which fail open:
+the loaded value is returned but not cached, and a warning is logged. To cache there, recreate the bucket with a
+limit marker TTL, or let the extension create it.
 
 The effective lifetime of any entry never exceeds the bucket TTL.
 
@@ -277,7 +278,7 @@ nats kv purge WEATHER_CACHE                 # drop everything (same effect as in
 ```
 
 The stored payload is an envelope `{ "data": <typed value> }`, where `data` is `null` for cached null results.
-Entries written with a per-item duration carry a `Nats-TTL` header (`nats kv get` doesn't show headers;
+Every entry carries a `Nats-TTL` header (the per-item duration, or about 68 years without one) (`nats kv get` doesn't show headers;
 `nats stream get KV_<bucket> --last-for '$KV.<bucket>.<key>'` does).
 
 ## Limitations

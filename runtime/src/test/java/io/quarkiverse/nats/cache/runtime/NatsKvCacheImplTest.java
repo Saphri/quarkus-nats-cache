@@ -17,7 +17,6 @@ import org.junit.jupiter.api.Test;
 
 import io.nats.client.JetStreamApiException;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
-import io.quarkiverse.reactive.messaging.nats.jetstream.client.connection.NativeConnection;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.KeyValue;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.KeyValueManagement;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.api.KeyValueEntry;
@@ -36,7 +35,7 @@ class NatsKvCacheImplTest {
     /** Map-backed KV whose reads and writes can be made to fail like an unreachable server. */
     static final class FakeKv {
         final Map<String, byte[]> entries = new ConcurrentHashMap<>();
-        /** The per-message TTL of each successful create, in order ({@code null} = no TTL). */
+        /** The per-message TTL of each successful create, in order. */
         final List<Duration> createTtls = new CopyOnWriteArrayList<>();
         final List<String> purges = new CopyOnWriteArrayList<>();
         /** The marker TTL of each purge, in order ({@code null} = plain purge). */
@@ -84,25 +83,10 @@ class NatsKvCacheImplTest {
                         }
                         throw new UnsupportedOperationException(method.getName());
                     });
-            // JNats KeyValue, for TTL-less creates.
-            io.nats.client.KeyValue nativeKv = (io.nats.client.KeyValue) Proxy.newProxyInstance(
-                    getClass().getClassLoader(), new Class<?>[] { io.nats.client.KeyValue.class },
-                    (proxy, method, args) -> {
-                        if (!method.getName().equals("create") || args.length != 2) {
-                            throw new UnsupportedOperationException(method.getName());
-                        }
-                        return create((String) args[0], (byte[]) args[1], null);
-                    });
-            NativeConnection connection = (NativeConnection) Proxy.newProxyInstance(getClass().getClassLoader(),
-                    new Class<?>[] { NativeConnection.class }, (proxy, method, args) -> switch (method.getName()) {
-                        case "keyValue" -> nativeKv;
-                        default -> throw new UnsupportedOperationException(method.getName());
-                    });
             return (Client) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[] { Client.class },
                     (proxy, method, args) -> switch (method.getName()) {
                         case "keyValue" -> kv;
                         case "keyValueManagement" -> management;
-                        case "nativeConnection" -> connection;
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
         }
@@ -223,7 +207,8 @@ class NatsKvCacheImplTest {
         assertThat(await(cache.<String, String> get("k", k -> "loaded", Duration.ofMinutes(5)))).isEqualTo("loaded");
         assertThat(await(cache.<String, String> get("plain", k -> "loaded"))).isEqualTo("loaded");
 
-        assertThat(fake.createTtls).containsExactly(Duration.ofMinutes(5), null); // no expiresAfter → no TTL
+        // No expiresAfter → the longest TTL the client accepts (the quarkiverse KeyValue has no create without one).
+        assertThat(fake.createTtls).containsExactly(Duration.ofMinutes(5), Duration.ofSeconds(Integer.MAX_VALUE));
         assertThat(fake.entries.values()).allSatisfy(
                 v -> assertThat(new String(v, StandardCharsets.UTF_8)).isEqualTo("{\"data\":\"loaded\"}"));
     }
