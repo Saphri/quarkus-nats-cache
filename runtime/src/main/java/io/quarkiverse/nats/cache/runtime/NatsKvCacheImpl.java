@@ -14,7 +14,6 @@ import java.util.function.Predicate;
 import org.jboss.logging.Logger;
 
 import io.nats.client.JetStreamApiException;
-import io.nats.client.MessageTtl;
 import io.nats.client.support.NatsKeyValueUtil;
 import io.quarkiverse.nats.cache.runtime.codec.CacheValueException;
 import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
@@ -59,7 +58,13 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     private final KeyValue kv;
     private final Client client;
 
-    /** JNats view of the bucket, for creates (see {@link #nativeKv()}). */
+    /** Longest per-message TTL the KV client accepts (whole seconds as an {@code int}). */
+    private static final Duration MAX_TTL = Duration.ofSeconds(Integer.MAX_VALUE);
+
+    /** Lifetime of the marker a purge leaves behind (the server minimum). */
+    static final Duration PURGE_MARKER_TTL = Duration.ofSeconds(1);
+
+    /** JNats view of the bucket, for TTL-less creates (see {@link #nativeKv()}). */
     private volatile io.nats.client.KeyValue nativeKv;
 
     /**
@@ -112,7 +117,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         return doGet(key, valueLoader::apply, messageTtlOf(expiresAfter));
     }
 
-    private <K, V> Uni<V> doGet(K key, Function<K, Uni<V>> loader, MessageTtl messageTtl) {
+    private <K, V> Uni<V> doGet(K key, Function<K, Uni<V>> loader, Duration messageTtl) {
         return Uni.createFrom().deferred(() -> {
             Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED_MSG);
             // Fail-fast (design D4): names the offending class and rejects over-length encodings; deferred turns
@@ -133,7 +138,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
                         if (failure instanceof CacheValueException) {
                             // Entries are only created, never overwritten: drop the unreadable entry first so the
                             // reloaded value can take its place. A failed purge just leaves the value uncached.
-                            return kv.purge(encoded).onFailure().recoverWithNull()
+                            return purge(encoded).onFailure().recoverWithNull()
                                     .chain(() -> loadAndStore(key, encoded, loader, messageTtl));
                         }
                         return loadAndStore(key, encoded, loader, messageTtl);
@@ -157,24 +162,23 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     }
 
     /**
-     * Converts {@code expiresAfter} to a per-message TTL. The server truncates TTLs to whole seconds and rejects
-     * anything below one second, so the duration is rounded up: an entry never expires early. Durations beyond
-     * {@code Integer.MAX_VALUE} seconds (about 68 years) are capped there.
+     * Validates {@code expiresAfter} as a per-message TTL. The KV client rounds it up to whole seconds (the server's
+     * granularity), so an entry never expires early; durations beyond {@code Integer.MAX_VALUE} seconds (about 68
+     * years), which the client refuses, are capped there.
      */
-    static MessageTtl messageTtlOf(Duration expiresAfter) {
+    static Duration messageTtlOf(Duration expiresAfter) {
         if (expiresAfter == null) {
             return null;
         }
         if (expiresAfter.isNegative() || expiresAfter.isZero()) {
             throw new IllegalArgumentException("expiresAfter must be positive");
         }
-        long seconds = expiresAfter.getSeconds() + (expiresAfter.getNano() > 0 ? 1 : 0);
-        return MessageTtl.seconds((int) Math.min(seconds, Integer.MAX_VALUE));
+        return expiresAfter.compareTo(MAX_TTL) > 0 ? MAX_TTL : expiresAfter;
     }
 
     // ------------------------------------------------------------------ stampede protection (design D3)
 
-    private <K, V> Uni<V> loadAndStore(K key, String encoded, Function<K, Uni<V>> loader, MessageTtl messageTtl) {
+    private <K, V> Uni<V> loadAndStore(K key, String encoded, Function<K, Uni<V>> loader, Duration messageTtl) {
         return Uni.createFrom().deferred(() -> {
             CompletableFuture<Object> pending = new CompletableFuture<>();
             CompletableFuture<Object> shared = inFlight.putIfAbsent(encoded, pending);
@@ -201,7 +205,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         });
     }
 
-    private <V> Uni<V> store(String encoded, V value, MessageTtl messageTtl) {
+    private <V> Uni<V> store(String encoded, V value, Duration messageTtl) {
         // Encoding errors are programming errors (unserializable value) and fail the call; a failed write is a
         // cache outage and does not (fail open): the loaded value is returned, just not cached.
         byte[] payload = ValueCodec.encode(value);
@@ -221,18 +225,26 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     /**
      * Writes a new entry, optionally with a per-message TTL (design D6). Entries are only ever created, never
      * updated: a live entry is kept until it expires or is invalidated, so a write for a key that already holds a
-     * value is refused (first write wins). JNats' {@code create} also succeeds over a delete or purge marker, which
-     * covers expired and invalidated keys. The quarkiverse {@code KeyValue} has no TTL-aware write, so this uses the
-     * JNats {@code KeyValue} (blocking → worker pool).
+     * value is refused (first write wins). A create also succeeds over a delete, purge or expiry marker, which covers
+     * expired and invalidated keys.
      */
-    private Uni<Long> create(String encoded, byte[] payload, MessageTtl messageTtl) {
-        return Uni.createFrom().item(Unchecked.supplier(() -> nativeKv().create(encoded, payload, messageTtl)))
+    private Uni<?> create(String encoded, byte[] payload, Duration messageTtl) {
+        if (messageTtl != null) {
+            return kv.create(encoded, payload, messageTtl);
+        }
+        // The quarkiverse KeyValue only offers create with a TTL; a TTL-less create goes through JNats (blocking →
+        // worker pool).
+        return Uni.createFrom().item(Unchecked.supplier(() -> nativeKv().create(encoded, payload)))
                 .runSubscriptionOn(NatsCacheWorkers.EXECUTOR);
     }
 
     private static boolean isAlreadyCached(Throwable failure) {
-        Throwable cause = failure != null && !(failure instanceof JetStreamApiException) ? failure.getCause() : failure;
-        return cause instanceof JetStreamApiException e && e.getApiErrorCode() == JS_WRONG_LAST_SEQUENCE;
+        for (Throwable t = failure; t != null; t = t.getCause()) {
+            if (t instanceof JetStreamApiException e) {
+                return e.getApiErrorCode() == JS_WRONG_LAST_SEQUENCE;
+            }
+        }
+        return false;
     }
 
     /** The JNats {@code KeyValue} for this bucket; created lazily, since creating one queries the stream. */
@@ -245,6 +257,15 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         return n;
     }
 
+    /**
+     * Purges a key (and its history). The purge marker carries a short TTL so the server removes it too: nothing
+     * here reads markers, and without a TTL every invalidated key would leave one behind for good. A bucket that
+     * does not allow per-message TTLs (created externally) refuses that, so fall back to a plain purge.
+     */
+    private Uni<Void> purge(String encoded) {
+        return kv.purge(encoded, PURGE_MARKER_TTL).onFailure().recoverWithUni(() -> kv.purge(encoded));
+    }
+
     // ------------------------------------------------------------------ invalidation
 
     @Override
@@ -253,7 +274,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
             Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED_MSG);
             String encoded = KeyCodec.encode(key);
             // purge (not delete): removes the key and all of its history; JNats purge is a no-op for absent keys.
-            return ensureBucket().chain(() -> kv.purge(encoded)).replaceWithVoid();
+            return ensureBucket().chain(() -> purge(encoded)).replaceWithVoid();
         });
     }
 
@@ -283,7 +304,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
                         .map(NatsKvCacheImpl::decodeStoredKey) // undecodable stored key → WARN + skip, never aborts
                         .filter(Objects::nonNull)
                         .filter(pair -> predicate.test(pair.decoded()))
-                        .onItem().call(pair -> kv.purge(pair.encoded()))
+                        .onItem().call(pair -> purge(pair.encoded()))
                         .collect().asList())
                 .replaceWithVoid();
     }
