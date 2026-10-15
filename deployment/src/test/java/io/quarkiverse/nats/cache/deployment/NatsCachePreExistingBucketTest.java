@@ -67,6 +67,14 @@ class NatsCachePreExistingBucketTest {
     }
 
     @Test
+    void invalidationWorksOnABucketWithoutPerMessageTtl() {
+        // The purge with a marker TTL is refused here; invalidation falls back to a plain purge.
+        assertThat(cache.get("inv", k -> "first").await().atMost(TIMEOUT)).isEqualTo("first");
+        cache.invalidate("inv").await().atMost(TIMEOUT);
+        assertThat(cache.get("inv", k -> "second").await().atMost(TIMEOUT)).isEqualTo("second");
+    }
+
+    @Test
     void expiresAfterFailsOpenOnABucketWithoutPerMessageTtl() {
         // The external bucket does not allow per-message TTLs, so the server refuses TTL-carrying writes: the
         // loaded value is still returned, just not cached (fail open), and the next read loads again.

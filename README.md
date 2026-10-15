@@ -247,6 +247,11 @@ Uni<Forecast> f = weather.get(city, this::callWeatherApi, Duration.ofMinutes(5))
 
 After any invalidation, the next read for an affected key is a miss and re-invokes the loader.
 
+Single-key purges (`invalidate`, `invalidateIf`) leave a purge marker that carries a one-second TTL, so the
+server removes the marker too and invalidated keys leave nothing behind. On a pre-existing bucket without
+per-message TTL support the extension falls back to a plain purge, whose marker stays until the key is written
+again or the bucket TTL removes it.
+
 ## Native image
 
 The extension supports GraalVM native execution (verified with a native smoke test covering put, get-hit,

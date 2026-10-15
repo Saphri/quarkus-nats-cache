@@ -101,6 +101,20 @@ class NatsCacheMixedBackendTest {
     }
 
     @Test
+    void invalidationLeavesNoMarkerBehind() throws Exception {
+        natsCache.get("inv", k -> "value").await().atMost(TIMEOUT);
+        natsCache.invalidate("inv").await().atMost(TIMEOUT);
+
+        // The purge marker carries a short TTL, so the server removes it as well: the stream ends up empty.
+        Thread.sleep(2500);
+        assertThat(client.nativeConnection().jetStreamManagement().getStreamInfo("KV_" + NATS_BUCKET)
+                .getStreamState().getMsgCount()).isZero();
+        // ...and the key can be cached again.
+        assertThat(natsCache.get("inv", k -> "again").await().atMost(TIMEOUT)).isEqualTo("again");
+        assertThat(natsCache.get("inv", k -> "NOT CALLED").await().atMost(TIMEOUT)).isEqualTo("again");
+    }
+
+    @Test
     void unreadableEntryIsReplaced() throws Exception {
         // Writes are create-only, so an unreadable entry must be purged before its reload can be cached.
         client.nativeConnection().keyValue(NATS_BUCKET)

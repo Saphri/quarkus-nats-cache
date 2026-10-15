@@ -16,7 +16,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 import io.nats.client.JetStreamApiException;
-import io.nats.client.MessageTtl;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.connection.NativeConnection;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.store.KeyValue;
@@ -38,8 +37,12 @@ class NatsKvCacheImplTest {
     static final class FakeKv {
         final Map<String, byte[]> entries = new ConcurrentHashMap<>();
         /** The per-message TTL of each successful create, in order ({@code null} = no TTL). */
-        final List<MessageTtl> createTtls = new CopyOnWriteArrayList<>();
+        final List<Duration> createTtls = new CopyOnWriteArrayList<>();
         final List<String> purges = new CopyOnWriteArrayList<>();
+        /** The marker TTL of each purge, in order ({@code null} = plain purge). */
+        final List<Duration> purgeMarkerTtls = new CopyOnWriteArrayList<>();
+        /** Simulates a bucket without per-message TTL support: purges with a marker TTL are refused. */
+        volatile boolean markerTtlRefused;
         volatile boolean readsFail;
         volatile boolean writesFail;
 
@@ -48,8 +51,22 @@ class NatsKvCacheImplTest {
                     (proxy, method, args) -> switch (method.getName()) {
                         case "get" -> readsFail ? Uni.createFrom().failure(new IllegalStateException("connection lost"))
                                 : Uni.createFrom().item(entry((String) args[0], entries.get((String) args[0])));
+                        case "create" -> {
+                            try {
+                                create((String) args[0], (byte[]) args[1], (Duration) args[2]);
+                                yield Uni.createFrom().item(entry((String) args[0], (byte[]) args[1]));
+                            } catch (Exception e) {
+                                // quarkiverse wraps the JNats failure (KeyValueException around Unchecked's wrapper)
+                                yield Uni.createFrom().failure(new RuntimeException(new RuntimeException(e)));
+                            }
+                        }
                         case "purge" -> {
+                            Duration markerTtl = args.length == 2 && args[1] instanceof Duration d ? d : null;
+                            if (markerTtl != null && markerTtlRefused) {
+                                yield Uni.createFrom().failure(new IllegalStateException("per-message TTL is disabled"));
+                            }
                             purges.add((String) args[0]);
+                            purgeMarkerTtls.add(markerTtl);
                             entries.remove((String) args[0]);
                             yield Uni.createFrom().voidItem();
                         }
@@ -67,21 +84,14 @@ class NatsKvCacheImplTest {
                         }
                         throw new UnsupportedOperationException(method.getName());
                     });
-            // JNats KeyValue: writes are create-only, so an existing key is refused like the server does.
+            // JNats KeyValue, for TTL-less creates.
             io.nats.client.KeyValue nativeKv = (io.nats.client.KeyValue) Proxy.newProxyInstance(
                     getClass().getClassLoader(), new Class<?>[] { io.nats.client.KeyValue.class },
                     (proxy, method, args) -> {
-                        if (!method.getName().equals("create") || args.length != 3) {
+                        if (!method.getName().equals("create") || args.length != 2) {
                             throw new UnsupportedOperationException(method.getName());
                         }
-                        if (writesFail) {
-                            throw new IllegalStateException("connection lost");
-                        }
-                        if (entries.putIfAbsent((String) args[0], (byte[]) args[1]) != null) {
-                            throw new WrongLastSequence();
-                        }
-                        createTtls.add((MessageTtl) args[2]);
-                        return (long) createTtls.size();
+                        return create((String) args[0], (byte[]) args[1], null);
                     });
             NativeConnection connection = (NativeConnection) Proxy.newProxyInstance(getClass().getClassLoader(),
                     new Class<?>[] { NativeConnection.class }, (proxy, method, args) -> switch (method.getName()) {
@@ -95,6 +105,18 @@ class NatsKvCacheImplTest {
                         case "nativeConnection" -> connection;
                         default -> throw new UnsupportedOperationException(method.getName());
                     });
+        }
+
+        /** Writes are create-only, so an existing key is refused like the server does. */
+        private long create(String key, byte[] value, Duration ttl) throws JetStreamApiException {
+            if (writesFail) {
+                throw new IllegalStateException("connection lost");
+            }
+            if (entries.putIfAbsent(key, value) != null) {
+                throw new WrongLastSequence();
+            }
+            createTtls.add(ttl);
+            return createTtls.size();
         }
 
         private static KeyValueEntry entry(String key, byte[] value) {
@@ -201,9 +223,7 @@ class NatsKvCacheImplTest {
         assertThat(await(cache.<String, String> get("k", k -> "loaded", Duration.ofMinutes(5)))).isEqualTo("loaded");
         assertThat(await(cache.<String, String> get("plain", k -> "loaded"))).isEqualTo("loaded");
 
-        assertThat(fake.createTtls).hasSize(2);
-        assertThat(fake.createTtls.get(0).getTtlString()).isEqualTo("300s");
-        assertThat(fake.createTtls.get(1)).isNull(); // no expiresAfter → no per-message TTL
+        assertThat(fake.createTtls).containsExactly(Duration.ofMinutes(5), null); // no expiresAfter → no TTL
         assertThat(fake.entries.values()).allSatisfy(
                 v -> assertThat(new String(v, StandardCharsets.UTF_8)).isEqualTo("{\"data\":\"loaded\"}"));
     }
@@ -221,14 +241,30 @@ class NatsKvCacheImplTest {
     }
 
     @Test
-    void expiresAfterIsRoundedUpToWholeSeconds() {
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofSeconds(2)).getTtlString()).isEqualTo("2s");
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofMillis(1)).getTtlString()).isEqualTo("1s");
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofMillis(1500)).getTtlString()).isEqualTo("2s");
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofDays(30)).getTtlString()).isEqualTo("2592000s");
+    void expiresAfterBeyondTheClientLimitIsCapped() {
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofDays(30))).isEqualTo(Duration.ofDays(30));
+        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofSeconds(Long.MAX_VALUE)))
+                .isEqualTo(Duration.ofSeconds(Integer.MAX_VALUE));
         assertThat(NatsKvCacheImpl.messageTtlOf(null)).isNull();
-        assertThat(NatsKvCacheImpl.messageTtlOf(Duration.ofSeconds(Long.MAX_VALUE)).getTtlString())
-                .isEqualTo(Integer.MAX_VALUE + "s");
+    }
+
+    @Test
+    void invalidationPurgesWithAShortLivedMarker() {
+        await(cache.<String, String> get("k", k -> "v"));
+        await(cache.invalidate("k"));
+
+        assertThat(fake.entries).isEmpty();
+        assertThat(fake.purgeMarkerTtls).containsExactly(NatsKvCacheImpl.PURGE_MARKER_TTL);
+    }
+
+    @Test
+    void invalidationFallsBackToAPlainPurgeOnABucketWithoutPerMessageTtl() {
+        await(cache.<String, String> get("k", k -> "v"));
+        fake.markerTtlRefused = true;
+        await(cache.invalidate("k"));
+
+        assertThat(fake.entries).isEmpty();
+        assertThat(fake.purgeMarkerTtls).containsExactly((Duration) null);
     }
 
     @Test
