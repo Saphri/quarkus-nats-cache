@@ -26,7 +26,7 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 
 ## Module map
 
-- `runtime/` — `NatsKvCacheImpl` (cache impl + stampede protection), `codec/` (`KeyCodec`: JSON+base64url keys; `ValueCodec`: `{exp, data}` JSON envelope), `NatsCachesBuildTimeConfig`, `NatsCacheBuildRecorder`.
+- `runtime/` — `NatsKvCacheImpl` (cache impl + stampede protection), `codec/` (`KeyCodec`: JSON+base64url keys; `ValueCodec`: `{data}` JSON envelope; `expiresAfter` is a server-side per-message TTL, not part of the payload), `NatsCachesBuildTimeConfig`, `NatsCacheBuildRecorder`.
 - `deployment/` — build steps: cache-manager info, native-image reflection registration (all app classes when any cache is `nats`-typed), and `BucketCollisionValidator` (build fails if two caches derive the same default bucket).
 - `integration-tests/` — smoke app (`src/main`) + `NatsKvCacheNativeIT`.
 
@@ -36,7 +36,8 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 - Project version is `999-SNAPSHOT` (Quarkiverse convention). The README's `1.0.0-SNAPSHOT` dependency snippet is stale — trust `pom.xml`.
 - Per-cache backend selector is `quarkus.cache.<name>.type` (core cache extension), **not** `quarkus.cache.caches.<name>.type`. This extension's own properties are `quarkus.nats-cache.caches.<name>.*` (`bucket`, `ttl`, `history`).
 - `expiresAfter` overloads are not yet on `io.quarkus.cache.Cache` in Quarkus 3.40; they exist ahead of upstream as public methods on `NatsKvCacheImpl` with the exact upstream signatures. When upgrading Quarkus, check whether they landed upstream and convert them to overrides.
-- Pinned versions: Quarkus `3.40.0`, quarkiverse `reactive-messaging-nats-jetstream` `3.39.7` (not BOM-managed). Java target is 17 (`maven.compiler.release`) even though the toolchain here is Java 25.
+- Pinned versions: Quarkus `3.40.0`, quarkiverse `reactive-messaging-nats-jetstream` `3.40.7` (not BOM-managed). Java target is 17 (`maven.compiler.release`) even though the toolchain here is Java 25.
+- Cache writes are **create-only** (first write wins; a create also succeeds over delete/purge/expiry markers). Writes use the quarkiverse `KeyValue.create(key, value, Duration)` (≥ 3.40.7); quarkiverse has no create without a TTL (its `put` is an overwriting put, not a create), so entries without `expiresAfter` are created with the max TTL (`Integer.MAX_VALUE` seconds) and the bucket max age still caps them. Consequence: a pre-existing bucket without `allow_msg_ttl` refuses every write (fail open, nothing cached). Purges carry a 1s marker TTL (`purge(key, Duration)`) and fall back to a plain purge on buckets without `allow_msg_ttl`. Unreadable entries are purged before their reload is stored. Buckets are provisioned with a `limitMarker`, the setting that enables `allow_msg_ttl` on a KV bucket (quarkiverse ≥ 3.40.6 maps it). Needs NATS server 2.11+ (dev service runs 2.14).
 - Key encoding must be deterministic (ordered collections only) and fit 255 bytes; fail-fast validation at store time is intentional — don't move it to read time.
 
 ## Workflow notes
