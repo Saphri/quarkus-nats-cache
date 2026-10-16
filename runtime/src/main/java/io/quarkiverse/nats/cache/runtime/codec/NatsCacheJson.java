@@ -15,7 +15,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
  * {@code valueToTree} fail — they deserialize into {@code JsonNode}, which Jackson then tries to resolve
  * as a typed subtype and rejects. Therefore:
  * <ul>
- *   <li>{@link #TYPED} embeds type info (class ids, {@code As.PROPERTY}) so that
+ *   <li>the typed mapper ({@link #typedMapper}) embeds type info (class ids, {@code As.PROPERTY}) so that
  *       {@code readValue(json, Object.class)} reconstructs the exact runtime class despite generic
  *       erasure of {@code Uni<V>}. It is used only for serializing/deserializing whole objects via
  *       {@code writeValueAsBytes} / {@code readValue(..., Object.class)} — never for tree operations;</li>
@@ -46,19 +46,21 @@ final class NatsCacheJson {
     /** Type-marker property name Jackson uses for default typing with {@code As.PROPERTY}. */
     static final String TYPE_PROPERTY = "@class";
 
-    /** Typed mapper: whole-object (de)serialization only — never call tree operations on it. */
-    static final ObjectMapper TYPED = createTypedMapper();
-
-    /** Plain mapper: structural JSON (envelopes, composite-key trees) without default typing. */
+    /** Plain mapper: structural JSON (envelopes, composite-key trees) without default typing; never reconfigured. */
     static final ObjectMapper PLAIN = new ObjectMapper();
 
     private NatsCacheJson() {
     }
 
-    private static ObjectMapper createTypedMapper() {
+    /**
+     * Builds the typed mapper: whole-object (de)serialization only — never call tree operations on it.
+     *
+     * @param allowList the classes the mapper may instantiate from a stored type id
+     */
+    static ObjectMapper typedMapper(CacheTypeAllowList allowList) {
         ObjectMapper mapper = JsonMapper.builder()
                 .activateDefaultTyping(
-                        CacheTypeAllowList.VALIDATOR,
+                        allowList.validator(),
                         ObjectMapper.DefaultTyping.EVERYTHING,
                         JsonTypeInfo.As.PROPERTY)
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)

@@ -1,6 +1,7 @@
 package io.quarkiverse.nats.cache.runtime.codec;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -28,7 +29,13 @@ public final class ValueCodec {
 
     private static final String DATA = "data";
 
-    private ValueCodec() {
+    private final ObjectMapper typed;
+
+    /**
+     * @param allowList the classes a stored value may name as its type
+     */
+    public ValueCodec(CacheTypeAllowList allowList) {
+        this.typed = NatsCacheJson.typedMapper(allowList);
     }
 
     /**
@@ -38,11 +45,11 @@ public final class ValueCodec {
      * @return the envelope payload bytes
      * @throws CacheValueException if the value cannot be serialized
      */
-    public static byte[] encode(Object value) {
+    public byte[] encode(Object value) {
         try {
             ObjectNode root = NatsCacheJson.PLAIN.createObjectNode();
             root.set(DATA, value == null ? NullNode.getInstance()
-                    : NatsCacheJson.PLAIN.readTree(NatsCacheJson.TYPED.writeValueAsBytes(value)));
+                    : NatsCacheJson.PLAIN.readTree(typed.writeValueAsBytes(value)));
             return NatsCacheJson.PLAIN.writeValueAsBytes(root);
         } catch (Exception e) {
             throw new CacheValueException("Cannot serialize cache value of class '"
@@ -57,7 +64,7 @@ public final class ValueCodec {
      * @return the decoded envelope (never null)
      * @throws CacheValueException if the payload is not a valid NATS KV cache envelope (unknown/legacy data)
      */
-    public static Envelope decode(byte[] payload) {
+    public Envelope decode(byte[] payload) {
         if (payload == null) {
             throw new CacheValueException("Stored cache value payload is null");
         }
@@ -75,7 +82,7 @@ public final class ValueCodec {
         try {
             JsonNode dataNode = root.get(DATA);
             data = dataNode.isNull() ? null
-                    : NatsCacheJson.TYPED.readValue(NatsCacheJson.PLAIN.writeValueAsBytes(dataNode), Object.class);
+                    : typed.readValue(NatsCacheJson.PLAIN.writeValueAsBytes(dataNode), Object.class);
         } catch (Exception e) {
             throw new CacheValueException("Cannot deserialize stored cache value: " + e.getMessage(), e);
         }

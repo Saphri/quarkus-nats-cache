@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Set;
 
 import jakarta.inject.Inject;
 
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.quarkiverse.nats.cache.runtime.NatsKvCacheImpl;
+import io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList;
 import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkus.cache.Cache;
@@ -84,10 +86,11 @@ class NatsCachePreExistingBucketTest {
         // An entry written by someone else (this extension cannot write here): the purge with a marker TTL is
         // refused, and invalidation falls back to a plain purge.
         var kv = client.nativeConnection().keyValue(BUCKET);
-        kv.put(KeyCodec.encode("inv"), "{\"data\":\"external\"}".getBytes(StandardCharsets.UTF_8));
+        String key = new KeyCodec(new CacheTypeAllowList(Set.of(), Set.of())).encode("inv");
+        kv.put(key, "{\"data\":\"external\"}".getBytes(StandardCharsets.UTF_8));
         assertThat(cache.get("inv", k -> "loaded").await().atMost(TIMEOUT)).isEqualTo("external");
 
         cache.invalidate("inv").await().atMost(TIMEOUT);
-        assertThat(kv.get(KeyCodec.encode("inv"))).isNull();
+        assertThat(kv.get(key)).isNull();
     }
 }

@@ -6,16 +6,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.List;
 import java.util.Map;
 
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 class ValueCodecTest {
 
-    @BeforeAll
-    static void allowFixtureTypes() {
-        // In an application the deployment module registers the application's packages; here, the fixtures'.
-        CacheTypeAllowList.allowExactPackages(java.util.Set.of(KeyCodecTest.class.getPackageName()));
-    }
+    // In an application the recorder allows the application's packages; here, the fixtures'.
+    private final ValueCodec codec = new ValueCodec(
+            new CacheTypeAllowList(java.util.Set.of(ValueCodecTest.class.getPackageName()), java.util.Set.of()));
 
     public static final class Order {
         private String id;
@@ -110,7 +107,7 @@ class ValueCodecTest {
     @Test
     void pojoValuesPreserveExactRuntimeClass() {
         Order order = new Order("o-1", List.of(new Item("sku-1", 2), new Item("sku-2", 5)));
-        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode(order));
+        ValueCodec.Envelope env = codec.decode(codec.encode(order));
         assertThat(env.data()).isInstanceOf(Order.class).isEqualTo(order);
         // nested elements keep their concrete types
         List<?> items = ((Order) env.data()).getItems();
@@ -119,19 +116,19 @@ class ValueCodecTest {
 
     @Test
     void scalarAndCollectionValuesRoundTrip() {
-        assertThat(ValueCodec.decode(ValueCodec.encode("hello")).data()).isEqualTo("hello");
-        assertThat(ValueCodec.decode(ValueCodec.encode(42)).data()).isEqualTo(42).isInstanceOf(Integer.class);
-        assertThat(ValueCodec.decode(ValueCodec.encode(42L)).data()).isInstanceOf(Long.class);
-        assertThat(ValueCodec.decode(ValueCodec.encode(1.5d)).data()).isEqualTo(1.5d);
-        assertThat(ValueCodec.decode(ValueCodec.encode(Boolean.FALSE)).data()).isEqualTo(Boolean.FALSE);
+        assertThat(codec.decode(codec.encode("hello")).data()).isEqualTo("hello");
+        assertThat(codec.decode(codec.encode(42)).data()).isEqualTo(42).isInstanceOf(Integer.class);
+        assertThat(codec.decode(codec.encode(42L)).data()).isInstanceOf(Long.class);
+        assertThat(codec.decode(codec.encode(1.5d)).data()).isEqualTo(1.5d);
+        assertThat(codec.decode(codec.encode(Boolean.FALSE)).data()).isEqualTo(Boolean.FALSE);
 
         List<String> list = List.of("a", "b");
-        assertThat(ValueCodec.decode(ValueCodec.encode(list)).data()).isEqualTo(list);
+        assertThat(codec.decode(codec.encode(list)).data()).isEqualTo(list);
 
         Map<String, Object> map = new java.util.LinkedHashMap<>();
         map.put("n", 1);
         map.put("s", "x");
-        assertThat(ValueCodec.decode(ValueCodec.encode(map)).data()).isEqualTo(map);
+        assertThat(codec.decode(codec.encode(map)).data()).isEqualTo(map);
     }
 
     @Test
@@ -141,7 +138,7 @@ class ValueCodecTest {
         Map<String, Object> value = new java.util.LinkedHashMap<>();
         value.put("data", "x");
         value.put("other", 123L);
-        ValueCodec.Envelope env = ValueCodec.decode(ValueCodec.encode(value));
+        ValueCodec.Envelope env = codec.decode(codec.encode(value));
         assertThat(env.data()).isEqualTo(value);
     }
 
@@ -149,11 +146,11 @@ class ValueCodecTest {
 
     @Test
     void cachedNullIsStoredAsDataNullEnvelope() {
-        byte[] payload = ValueCodec.encode(null);
+        byte[] payload = codec.encode(null);
         String json = new String(payload, java.nio.charset.StandardCharsets.UTF_8);
         assertThat(json).contains("\"data\":null");
 
-        ValueCodec.Envelope env = ValueCodec.decode(payload);
+        ValueCodec.Envelope env = codec.decode(payload);
         assertThat(env.data()).isNull();
     }
 
@@ -162,7 +159,7 @@ class ValueCodecTest {
     @Test
     void plainScalarPayloadFailsCleanly() {
         byte[] payload = "\"just a string\"".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        assertThatThrownBy(() -> ValueCodec.decode(payload))
+        assertThatThrownBy(() -> codec.decode(payload))
                 .isInstanceOf(CacheValueException.class)
                 .hasMessageContaining("envelope");
     }
@@ -170,20 +167,20 @@ class ValueCodecTest {
     @Test
     void objectWithoutDataMemberFailsCleanly() {
         byte[] payload = "{\"foo\":1}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        assertThatThrownBy(() -> ValueCodec.decode(payload))
+        assertThatThrownBy(() -> codec.decode(payload))
                 .isInstanceOf(CacheValueException.class)
                 .hasMessageContaining("data");
     }
 
     @Test
     void nonJsonPayloadFailsCleanly() {
-        assertThatThrownBy(() -> ValueCodec.decode(new byte[] { 1, 2, 3 }))
+        assertThatThrownBy(() -> codec.decode(new byte[] { 1, 2, 3 }))
                 .isInstanceOf(CacheValueException.class);
     }
 
     @Test
     void nullPayloadFailsCleanly() {
-        assertThatThrownBy(() -> ValueCodec.decode(null))
+        assertThatThrownBy(() -> codec.decode(null))
                 .isInstanceOf(CacheValueException.class);
     }
 }
