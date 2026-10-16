@@ -70,13 +70,6 @@ public final class CacheTypeAllowList {
         this.prefixes = Set.copyOf(normalized);
     }
 
-    /**
-     * @return an allow-list accepting only the JDK value types (no application packages, no configured prefixes)
-     */
-    public static CacheTypeAllowList jdkOnly() {
-        return new CacheTypeAllowList(Set.of(), Set.of());
-    }
-
     PolymorphicTypeValidator validator() {
         return validator;
     }

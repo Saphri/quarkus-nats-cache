@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Set;
 
 import jakarta.inject.Inject;
 
@@ -85,10 +86,11 @@ class NatsCachePreExistingBucketTest {
         // An entry written by someone else (this extension cannot write here): the purge with a marker TTL is
         // refused, and invalidation falls back to a plain purge.
         var kv = client.nativeConnection().keyValue(BUCKET);
-        kv.put(new KeyCodec(CacheTypeAllowList.jdkOnly()).encode("inv"), "{\"data\":\"external\"}".getBytes(StandardCharsets.UTF_8));
+        String key = new KeyCodec(new CacheTypeAllowList(Set.of(), Set.of())).encode("inv");
+        kv.put(key, "{\"data\":\"external\"}".getBytes(StandardCharsets.UTF_8));
         assertThat(cache.get("inv", k -> "loaded").await().atMost(TIMEOUT)).isEqualTo("external");
 
         cache.invalidate("inv").await().atMost(TIMEOUT);
-        assertThat(kv.get(new KeyCodec(CacheTypeAllowList.jdkOnly()).encode("inv"))).isNull();
+        assertThat(kv.get(key)).isNull();
     }
 }
