@@ -21,7 +21,7 @@ public record NatsCacheInfo(String name, String bucket, Optional<Duration> ttl, 
     /**
      * The single resolution path from a cache name to its validated info. Both the runtime recorder and the
      * build-time collision validation go through here, so an invalid setting fails the build instead of the
-     * first cache access.
+     * cache manager's creation at startup.
      *
      * @param name the cache name
      * @param config this extension's configuration ({@code quarkus.nats-cache.caches.<name>.*})
