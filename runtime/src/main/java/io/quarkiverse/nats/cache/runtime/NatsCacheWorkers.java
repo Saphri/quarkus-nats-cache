@@ -7,15 +7,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Shared worker pool for the (rare) blocking operations of the NATS KV cache backend: synchronous value
- * loaders and the raw-JNats stream purge used by {@code invalidateAll()} (design D3). These must never run on
- * a Vert.x event loop.
+ * loaders on the cache side, and blocking NATS calls (the raw-JNats stream purge behind {@code invalidateAll()})
+ * on the KV bucket side (design D3). These must never run on a Vert.x event loop.
  *
  * <p>Daemon threads are created on demand and reclaimed after 60 seconds of idleness, so an idle application
  * holds no threads; concurrent loads each get their own short-lived worker thread.
  */
 public final class NatsCacheWorkers {
 
-    static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(new ThreadFactory() {
+    public static final ExecutorService EXECUTOR = Executors.newCachedThreadPool(new ThreadFactory() {
         private final AtomicInteger sequence = new AtomicInteger();
 
         @Override
@@ -27,14 +27,5 @@ public final class NatsCacheWorkers {
     });
 
     private NatsCacheWorkers() {
-    }
-
-    /**
-     * Runs a blocking task on a worker thread.
-     *
-     * @param task the task; must not be null
-     */
-    public static void execute(Runnable task) {
-        EXECUTOR.execute(task);
     }
 }
