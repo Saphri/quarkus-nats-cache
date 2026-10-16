@@ -3,7 +3,6 @@ package io.quarkiverse.nats.cache.runtime.codec;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.cache.CompositeCacheKey;
@@ -11,11 +10,9 @@ import io.quarkus.cache.DefaultCacheKey;
 
 class KeyCodecTest {
 
-    @BeforeAll
-    static void allowFixtureTypes() {
-        // In an application the deployment module registers the application's packages; here, the fixtures'.
-        CacheTypeAllowList.allowExactPackages(java.util.Set.of(KeyCodecTest.class.getPackageName()));
-    }
+    // In an application the recorder allows the application's packages; here, the fixtures'.
+    private final KeyCodec codec = new KeyCodec(
+            new CacheTypeAllowList(java.util.Set.of(KeyCodecTest.class.getPackageName()), java.util.Set.of()));
 
     // --- key fixtures -------------------------------------------------------
 
@@ -150,32 +147,32 @@ class KeyCodecTest {
     @Test
     void stringKeysRoundTrip() {
         for (String key : new String[] { "simple", "with spaces", "unicode-ümlauts-日本語", "" }) {
-            assertThat(KeyCodec.decode(KeyCodec.encode(key))).isEqualTo(key);
+            assertThat(codec.decode(codec.encode(key))).isEqualTo(key);
         }
     }
 
     @Test
     void numericAndBooleanKeysRoundTrip() {
-        assertThat(KeyCodec.decode(KeyCodec.encode(42))).isEqualTo(42).isInstanceOf(Integer.class);
-        assertThat(KeyCodec.decode(KeyCodec.encode(42L))).isEqualTo(42L).isInstanceOf(Long.class);
-        assertThat(KeyCodec.decode(KeyCodec.encode(1.5d))).isEqualTo(1.5d).isInstanceOf(Double.class);
-        assertThat(KeyCodec.decode(KeyCodec.encode(Boolean.TRUE))).isEqualTo(Boolean.TRUE);
+        assertThat(codec.decode(codec.encode(42))).isEqualTo(42).isInstanceOf(Integer.class);
+        assertThat(codec.decode(codec.encode(42L))).isEqualTo(42L).isInstanceOf(Long.class);
+        assertThat(codec.decode(codec.encode(1.5d))).isEqualTo(1.5d).isInstanceOf(Double.class);
+        assertThat(codec.decode(codec.encode(Boolean.TRUE))).isEqualTo(Boolean.TRUE);
     }
 
     @Test
     void longAndIntegerKeysDoNotCollide() {
         // Same numeric value, different Java types: encodings must differ (Long is type-wrapped).
-        String encodedInt = KeyCodec.encode(42);
-        String encodedLong = KeyCodec.encode(42L);
+        String encodedInt = codec.encode(42);
+        String encodedLong = codec.encode(42L);
         assertThat(encodedLong).isNotEqualTo(encodedInt);
-        assertThat(KeyCodec.decode(encodedInt)).isInstanceOf(Integer.class);
-        assertThat(KeyCodec.decode(encodedLong)).isInstanceOf(Long.class);
+        assertThat(codec.decode(encodedInt)).isInstanceOf(Integer.class);
+        assertThat(codec.decode(encodedLong)).isInstanceOf(Long.class);
     }
 
     @Test
     void pojoKeysRoundTripWithoutRegistration() {
         Point key = new Point(1, 2);
-        Object decoded = KeyCodec.decode(KeyCodec.encode(key));
+        Object decoded = codec.decode(codec.encode(key));
         assertThat(decoded).isInstanceOf(Point.class).isEqualTo(key);
     }
 
@@ -185,18 +182,18 @@ class KeyCodecTest {
         KeyB b = new KeyB(7);
         assertThat(a.toString()).isEqualTo(b.toString()); // the trap: identical toString()
 
-        String encodedA = KeyCodec.encode(a);
-        String encodedB = KeyCodec.encode(b);
+        String encodedA = codec.encode(a);
+        String encodedB = codec.encode(b);
         assertThat(encodedA).isNotEqualTo(encodedB);
 
-        assertThat(KeyCodec.decode(encodedA)).isEqualTo(a).isInstanceOf(KeyA.class);
-        assertThat(KeyCodec.decode(encodedB)).isEqualTo(b).isInstanceOf(KeyB.class);
+        assertThat(codec.decode(encodedA)).isEqualTo(a).isInstanceOf(KeyA.class);
+        assertThat(codec.decode(encodedB)).isEqualTo(b).isInstanceOf(KeyB.class);
     }
 
     @Test
     void compositeKeysWithHeterogeneousElementsRoundTrip() {
         CompositeCacheKey key = new CompositeCacheKey("user", 42L, new Point(3, 4));
-        Object decoded = KeyCodec.decode(KeyCodec.encode(key));
+        Object decoded = codec.decode(codec.encode(key));
         assertThat(decoded).isInstanceOf(CompositeCacheKey.class);
         assertThat(decoded).isEqualTo(key);
     }
@@ -206,7 +203,7 @@ class KeyCodecTest {
         // Compact top-level element types so the encoded key stays within the 255-char NATS limit while still
         // exercising POJO elements that need no Jackson registration and must keep their exact runtime class.
         CompositeCacheKey key = new CompositeCacheKey(new K1(1), new K2(9));
-        Object decoded = KeyCodec.decode(KeyCodec.encode(key));
+        Object decoded = codec.decode(codec.encode(key));
         assertThat(decoded).isEqualTo(key);
         assertThat(((CompositeCacheKey) decoded).getKeyElements()[0]).isInstanceOf(K1.class).isEqualTo(new K1(1));
         assertThat(((CompositeCacheKey) decoded).getKeyElements()[1]).isInstanceOf(K2.class).isEqualTo(new K2(9));
@@ -215,7 +212,7 @@ class KeyCodecTest {
     @Test
     void compositeKeysWithNullElementsRoundTrip() {
         CompositeCacheKey key = new CompositeCacheKey(null, "fallback");
-        Object decoded = KeyCodec.decode(KeyCodec.encode(key));
+        Object decoded = codec.decode(codec.encode(key));
         assertThat(decoded).isInstanceOf(CompositeCacheKey.class);
         assertThat(decoded).isEqualTo(key);
         assertThat(((CompositeCacheKey) decoded).getKeyElements()).containsExactly(null, "fallback");
@@ -224,14 +221,14 @@ class KeyCodecTest {
     @Test
     void defaultCacheKeysRoundTrip() {
         DefaultCacheKey key = new DefaultCacheKey("my-cache");
-        Object decoded = KeyCodec.decode(KeyCodec.encode(key));
+        Object decoded = codec.decode(codec.encode(key));
         assertThat(decoded).isInstanceOf(DefaultCacheKey.class).isEqualTo(key);
     }
 
     @Test
     void recordKeysRoundTrip() {
         PointRecord key = new PointRecord(5, 6);
-        Object decoded = KeyCodec.decode(KeyCodec.encode(key));
+        Object decoded = codec.decode(codec.encode(key));
         assertThat(decoded).isEqualTo(key);
     }
 
@@ -242,7 +239,7 @@ class KeyCodecTest {
 
     @Test
     void nullKeyIsRejected() {
-        assertThatThrownBy(() -> KeyCodec.encode(null))
+        assertThatThrownBy(() -> codec.encode(null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("null");
     }
@@ -250,7 +247,7 @@ class KeyCodecTest {
     @Test
     void unsupportedKeyTypeIsRejectedAtStoreTimeNamingTheClass() {
         NoDefaultCtor key = new NoDefaultCtor("value");
-        assertThatThrownBy(() -> KeyCodec.encode(key))
+        assertThatThrownBy(() -> codec.encode(key))
                 .isInstanceOf(CacheKeyEncodingException.class)
                 .hasMessageContaining(NoDefaultCtor.class.getName());
     }
@@ -258,7 +255,7 @@ class KeyCodecTest {
     @Test
     void unsupportedCompositeElementIsRejectedNamingTheClass() {
         CompositeCacheKey key = new CompositeCacheKey("ok", new NoDefaultCtor("bad"));
-        assertThatThrownBy(() -> KeyCodec.encode(key))
+        assertThatThrownBy(() -> codec.encode(key))
                 .isInstanceOf(CacheKeyEncodingException.class)
                 .hasMessageContaining(NoDefaultCtor.class.getName());
     }
@@ -266,19 +263,19 @@ class KeyCodecTest {
     @Test
     void oversizedKeyIsRejectedWithDescriptiveError() {
         String longKey = "k".repeat(300); // encodes well over 255 base64url characters
-        assertThatThrownBy(() -> KeyCodec.encode(longKey))
+        assertThatThrownBy(() -> codec.encode(longKey))
                 .isInstanceOf(CacheKeyEncodingException.class)
                 .hasMessageContaining("255")
                 .hasMessageContaining(String.class.getName());
 
         // A key that fits must still be accepted (boundary sanity).
         String fittingKey = "k".repeat(100);
-        assertThat(KeyCodec.encode(fittingKey).length()).isLessThanOrEqualTo(255);
+        assertThat(codec.encode(fittingKey).length()).isLessThanOrEqualTo(255);
     }
 
     @Test
     void decodingGarbageFailsCleanly() {
-        assertThatThrownBy(() -> KeyCodec.decode("!!!not-base64url!!!"))
+        assertThatThrownBy(() -> codec.decode("!!!not-base64url!!!"))
                 .isInstanceOf(CacheKeyEncodingException.class);
     }
 }

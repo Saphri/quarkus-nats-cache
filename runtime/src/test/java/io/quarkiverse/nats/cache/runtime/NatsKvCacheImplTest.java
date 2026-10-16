@@ -6,11 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
+import io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList;
 import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
+import io.quarkiverse.nats.cache.runtime.codec.ValueCodec;
 import io.quarkus.cache.CacheException;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.helpers.test.UniAssertSubscriber;
@@ -23,9 +26,14 @@ import io.smallrye.mutiny.subscription.UniEmitter;
  */
 class NatsKvCacheImplTest {
 
+    /** One allow-list for the cache's codecs, as the recorder builds per application. */
+    private static final CacheTypeAllowList JDK_ONLY = new CacheTypeAllowList(Set.of(), Set.of());
+    private static final KeyCodec KEYS = new KeyCodec(JDK_ONLY);
+
     private final FakeKvBucket fake = new FakeKvBucket();
     private final NatsKvCacheImpl cache = new NatsKvCacheImpl(
-            NatsCacheInfo.of("test", Optional.empty(), Optional.empty(), 1), fake);
+            NatsCacheInfo.of("test", Optional.empty(), Optional.empty(), 1), fake,
+            KEYS, new ValueCodec(JDK_ONLY));
 
     private static <T> T await(Uni<T> uni) {
         return uni.await().atMost(Duration.ofSeconds(5));
@@ -134,7 +142,7 @@ class NatsKvCacheImplTest {
         await(cache.invalidate("k"));
 
         assertThat(fake.entries).isEmpty();
-        assertThat(fake.purges).containsExactly(KeyCodec.encode("k"));
+        assertThat(fake.purges).containsExactly(KEYS.encode("k"));
     }
 
     @Test
@@ -171,8 +179,8 @@ class NatsKvCacheImplTest {
 
         await(cache.invalidateIf(k -> ((String) k).startsWith("drop")));
 
-        assertThat(fake.purges).containsExactlyInAnyOrder(KeyCodec.encode("drop-1"), KeyCodec.encode("drop-2"));
-        assertThat(fake.entries).containsOnlyKeys(KeyCodec.encode("keep"));
+        assertThat(fake.purges).containsExactlyInAnyOrder(KEYS.encode("drop-1"), KEYS.encode("drop-2"));
+        assertThat(fake.entries).containsOnlyKeys(KEYS.encode("keep"));
     }
 
     @Test
@@ -182,7 +190,7 @@ class NatsKvCacheImplTest {
 
         await(cache.invalidateIf(k -> true));
 
-        assertThat(fake.purges).containsExactly(KeyCodec.encode("drop"));
+        assertThat(fake.purges).containsExactly(KEYS.encode("drop"));
         assertThat(fake.entries).containsOnlyKeys("not a codec key");
     }
 
