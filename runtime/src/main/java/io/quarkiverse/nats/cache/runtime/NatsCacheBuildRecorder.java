@@ -9,6 +9,8 @@ import java.util.function.Supplier;
 import org.jboss.logging.Logger;
 
 import io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList;
+import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
+import io.quarkiverse.nats.cache.runtime.codec.ValueCodec;
 import io.quarkiverse.nats.cache.runtime.kv.QuarkiverseKvBucket;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkus.arc.Arc;
@@ -43,9 +45,11 @@ public class NatsCacheBuildRecorder {
     }
 
     /**
+     * @param applicationPackages the packages declaring application classes (from the build-time index); with the
+     *        configured {@code quarkus.nats-cache.allowed-packages} prefixes they form the codecs' type allow-list
      * @return the {@link CacheManagerInfo} matching cache type {@code nats}
      */
-    public CacheManagerInfo getCacheManagerSupplier() {
+    public CacheManagerInfo getCacheManagerSupplier(Set<String> applicationPackages) {
         return new CacheManagerInfo() {
             @Override
             public boolean supports(CacheManagerInfo.Context context) {
@@ -64,28 +68,22 @@ public class NatsCacheBuildRecorder {
                                 + "and a NATS data source is configured (quarkus.messaging.nats.*)", null);
                     }
                     Client client = clientInstance.get();
+                    // The deserialization trust boundary of this application: built here, shared by its caches only.
+                    CacheTypeAllowList allowList = new CacheTypeAllowList(applicationPackages,
+                            config.allowedPackages().orElse(List.of()));
+                    KeyCodec keyCodec = new KeyCodec(allowList);
+                    ValueCodec valueCodec = new ValueCodec(allowList);
                     Map<String, Cache> caches = new HashMap<>(cacheNames.size() + 1);
                     for (String name : cacheNames) {
                         NatsCacheInfo info = NatsCacheInfo.resolve(name, config);
                         if (LOGGER.isDebugEnabled()) {
                             LOGGER.debugf("Building NATS KV cache [%s] on bucket [%s]", name, info.bucket());
                         }
-                        caches.put(name, new NatsKvCacheImpl(info, new QuarkiverseKvBucket(client, info)));
+                        caches.put(name, new NatsKvCacheImpl(info, new QuarkiverseKvBucket(client, info), keyCodec, valueCodec));
                     }
                     return new CacheManagerImpl(caches);
                 };
             }
         };
-    }
-
-    /**
-     * Configures the codec type allow-list: the application's own packages (from the build-time index) plus the
-     * configured {@code quarkus.nats-cache.allowed-packages} prefixes.
-     *
-     * @param applicationPackages the packages declaring application classes
-     */
-    public void allowTypes(Set<String> applicationPackages) {
-        CacheTypeAllowList.allowExactPackages(applicationPackages);
-        CacheTypeAllowList.allowPackagePrefixes(config.allowedPackages().orElse(List.of()));
     }
 }
