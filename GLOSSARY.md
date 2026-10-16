@@ -1,7 +1,7 @@
 # Glossary
 
-**KV bucket access** — the module (`io.quarkiverse.nats.cache.runtime.kv`) that talks to one NATS KV bucket on the
-cache's behalf. Its interface, `KvBucket`, takes encoded keys and opaque payloads and returns clean outcomes (a miss
-is an empty optional, a refused create is `ALREADY_CACHED`, a failure is a real error). Everything about *what to do*
-(fail open, retry provisioning, stampede sharing, first write wins) stays in the cache; everything about *how to talk
-to NATS* lives behind this seam. The production adapter is `QuarkiverseKvBucket`.
+Domain language for quarkus-nats-cache. Use these names in code, issues, and discussion; one entry per concept.
+
+## KV bucket access
+
+The seam between cache policy and NATS transport: a narrow interface over one NATS KV bucket — `get`, `create`, `purge`, `keys`, `provision`, `purgeAll`. The production adapter wraps the quarkiverse JetStream client and absorbs its quirks (miss-as-null, wrong-last-sequence, TTL substitution, purge-marker fallback); tests implement the interface directly.
