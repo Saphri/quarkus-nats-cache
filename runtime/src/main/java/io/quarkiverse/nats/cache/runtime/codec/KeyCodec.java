@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -34,9 +35,16 @@ public final class KeyCodec {
     /** NATS subject tokens are limited to 255 characters; KV keys must fit in one token. */
     public static final int MAX_ENCODED_KEY_LENGTH = 255;
 
-    private static final Map<Class<?>, Boolean> ROUND_TRIP_VALIDATED = new ConcurrentHashMap<>();
+    private final ObjectMapper typed;
 
-    private KeyCodec() {
+    /** Key classes already proven reconstructable; per instance, since the answer depends on the allow-list. */
+    private final Map<Class<?>, Boolean> roundTripValidated = new ConcurrentHashMap<>();
+
+    /**
+     * @param allowList the classes a stored key may name as its type
+     */
+    public KeyCodec(CacheTypeAllowList allowList) {
+        this.typed = NatsCacheJson.typedMapper(allowList);
     }
 
     /**
@@ -46,7 +54,7 @@ public final class KeyCodec {
      * @return the encoded key, at most {@link #MAX_ENCODED_KEY_LENGTH} characters long
      * @throws CacheKeyEncodingException if the key is null, not serializable/reconstructable, or too long
      */
-    public static String encode(Object key) {
+    public String encode(Object key) {
         Objects.requireNonNull(key, "cache keys must not be null");
         byte[] json = toJson(key);
         String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(json);
@@ -66,7 +74,7 @@ public final class KeyCodec {
      * @return the reconstructed key object
      * @throws CacheKeyEncodingException if the token is not valid base64url or the payload is not decodable
      */
-    public static Object decode(String encoded) {
+    public Object decode(String encoded) {
         Objects.requireNonNull(encoded, "encoded cache key must not be null");
         byte[] json;
         try {
@@ -77,7 +85,7 @@ public final class KeyCodec {
         return fromJson(json);
     }
 
-    private static byte[] toJson(Object key) {
+    private byte[] toJson(Object key) {
         try {
             if (key instanceof CompositeCacheKey composite) {
                 // CompositeCacheKey has no no-arg constructor and its elements are heterogeneous, so it is
@@ -98,7 +106,7 @@ public final class KeyCodec {
                 return NatsCacheJson.PLAIN.writeValueAsBytes(root);
             }
             // Everything else: the typed mapper embeds "@class" for POJOs and wraps Long values.
-            return NatsCacheJson.TYPED.writeValueAsBytes(key);
+            return typed.writeValueAsBytes(key);
         } catch (CacheKeyEncodingException e) {
             throw e;
         } catch (Exception e) {
@@ -107,7 +115,7 @@ public final class KeyCodec {
         }
     }
 
-    private static Object fromJson(byte[] json) {
+    private Object fromJson(byte[] json) {
         try {
             JsonNode root = NatsCacheJson.PLAIN.readTree(json);
             if (root.isObject()) {
@@ -126,7 +134,7 @@ public final class KeyCodec {
                 }
             }
             // Plain values and typed POJOs: default typing drives reconstruction of the exact runtime class.
-            return NatsCacheJson.TYPED.readValue(json, Object.class);
+            return typed.readValue(json, Object.class);
         } catch (CacheKeyEncodingException e) {
             throw e;
         } catch (Exception e) {
@@ -135,20 +143,20 @@ public final class KeyCodec {
     }
 
     /** Serializes an object with the typed mapper and parses the result into a plain tree node. */
-    private static JsonNode typedNode(Object value) throws Exception {
-        return NatsCacheJson.PLAIN.readTree(NatsCacheJson.TYPED.writeValueAsBytes(value));
+    private JsonNode typedNode(Object value) throws Exception {
+        return NatsCacheJson.PLAIN.readTree(typed.writeValueAsBytes(value));
     }
 
     /** Re-serializes a tree node and deserializes it with the typed mapper to recover the exact runtime class. */
-    private static Object typedValue(JsonNode node) throws Exception {
-        return NatsCacheJson.TYPED.readValue(NatsCacheJson.PLAIN.writeValueAsBytes(node), Object.class);
+    private Object typedValue(JsonNode node) throws Exception {
+        return typed.readValue(NatsCacheJson.PLAIN.writeValueAsBytes(node), Object.class);
     }
 
     /**
      * Fail-fast validation (design D4): on first use of a key class, attempt a trial reconstruction and
      * reject classes Jackson cannot build back, naming the offending class. Results are memoized per class.
      */
-    private static void validateRoundTrip(Object key, byte[] json) {
+    private void validateRoundTrip(Object key, byte[] json) {
         Class<?> keyClass = key.getClass();
         if (key instanceof CompositeCacheKey composite) {
             // A previously validated composite says nothing about the elements of a new one, so element
@@ -159,7 +167,7 @@ public final class KeyCodec {
             }
             return;
         }
-        if (ROUND_TRIP_VALIDATED.containsKey(keyClass)) {
+        if (roundTripValidated.containsKey(keyClass)) {
             return;
         }
         try {
@@ -170,15 +178,15 @@ public final class KeyCodec {
                             + e.getMessage(),
                     e);
         }
-        ROUND_TRIP_VALIDATED.put(keyClass, Boolean.TRUE);
+        roundTripValidated.put(keyClass, Boolean.TRUE);
     }
 
-    private static void validateElement(Object element) {
+    private void validateElement(Object element) {
         if (element == null) {
             return; // null elements are representable (NullNode) and decode back to null
         }
         Class<?> elementClass = element.getClass();
-        if (ROUND_TRIP_VALIDATED.containsKey(elementClass)) {
+        if (roundTripValidated.containsKey(elementClass)) {
             return;
         }
         try {
@@ -189,7 +197,7 @@ public final class KeyCodec {
                             + e.getMessage(),
                     e);
         }
-        ROUND_TRIP_VALIDATED.put(elementClass, Boolean.TRUE);
+        roundTripValidated.put(elementClass, Boolean.TRUE);
     }
 
     private static String cacheNameOf(DefaultCacheKey key) {

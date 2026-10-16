@@ -40,21 +40,15 @@ public class NatsCacheProcessor {
      * collects all {@link CacheManagerInfoBuildItem}s and asks each one's {@code supports(context)} whether it
      * handles the resolved type of the requested caches; ours answers for {@code "nats"} only, so it coexists
      * with the Caffeine backend (task 4.3).
+     *
+     * <p>The application's packages are handed to the recorder for the codec type allow-list: stored entries may
+     * only name classes from them (plus the JDK value types and {@code quarkus.nats-cache.allowed-packages}),
+     * never an arbitrary class on the classpath. The recorder builds the allow-list together with the caches, so
+     * it is in place before any cache operation can decode an entry.
      */
     @BuildStep
     @Record(value = ExecutionTime.RUNTIME_INIT)
-    CacheManagerInfoBuildItem cacheManagerInfo(NatsCacheBuildRecorder recorder) {
-        return new CacheManagerInfoBuildItem(recorder.getCacheManagerSupplier());
-    }
-
-    /**
-     * Codec type allow-list: stored entries may only name classes from the application's own packages (plus the
-     * JDK value types and {@code quarkus.nats-cache.allowed-packages}), never an arbitrary class on the classpath.
-     * Static init, so the list is in place before any cache operation can decode an entry.
-     */
-    @BuildStep
-    @Record(ExecutionTime.STATIC_INIT)
-    void allowedTypes(ApplicationIndexBuildItem appIndex, NatsCacheBuildRecorder recorder) {
+    CacheManagerInfoBuildItem cacheManagerInfo(ApplicationIndexBuildItem appIndex, NatsCacheBuildRecorder recorder) {
         Set<String> packages = new TreeSet<>();
         for (ClassInfo appClass : appIndex.getIndex().getKnownClasses()) {
             String pkg = appClass.name().packagePrefix();
@@ -62,7 +56,7 @@ public class NatsCacheProcessor {
                 packages.add(pkg);
             }
         }
-        recorder.allowTypes(packages);
+        return new CacheManagerInfoBuildItem(recorder.getCacheManagerSupplier(packages));
     }
 
     /**

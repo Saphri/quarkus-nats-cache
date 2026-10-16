@@ -1,6 +1,7 @@
 package io.quarkiverse.nats.cache.runtime.codec;
 
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -9,6 +10,7 @@ import org.jboss.logging.Logger;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.cfg.MapperConfig;
 import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator;
+import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator.Validity;
 
 /**
  * Allow-list of the classes the codecs may instantiate from a stored {@code @class} type id.
@@ -26,6 +28,10 @@ import com.fasterxml.jackson.databind.jsontype.PolymorphicTypeValidator;
  *
  * <p>The decision is taken on the class <em>name</em>, before Jackson loads the class, so a denied class is
  * never initialized.
+ *
+ * <p>Instances are immutable apart from the warn-once bookkeeping, and nothing is shared between instances: the
+ * recorder builds one per application from the build-time package list, so two applications in the same JVM
+ * (test suites, dev-mode restarts) never see each other's packages.
  */
 public final class CacheTypeAllowList {
 
@@ -34,55 +40,57 @@ public final class CacheTypeAllowList {
     private static final Set<String> JDK_PACKAGES = Set.of("java.lang", "java.util", "java.time", "java.math");
 
     /** Packages whose classes (but not sub-packages) are allowed: the application's own packages. */
-    private static final Set<String> EXACT_PACKAGES = ConcurrentHashMap.newKeySet();
+    private final Set<String> exactPackages;
 
     /** Package prefixes whose classes and sub-packages are allowed: {@code quarkus.nats-cache.allowed-packages}. */
-    private static final Set<String> PREFIXES = ConcurrentHashMap.newKeySet();
+    private final Set<String> prefixes;
 
     /** Denied class names already logged, so a misconfiguration warns once per class instead of once per read. */
-    private static final Set<String> REPORTED = ConcurrentHashMap.newKeySet();
+    private final Set<String> reported = ConcurrentHashMap.newKeySet();
 
-    static final PolymorphicTypeValidator VALIDATOR = new Validator();
-
-    private CacheTypeAllowList() {
-    }
+    private final PolymorphicTypeValidator validator = new Validator();
 
     /**
-     * Allows every class declared directly in the given packages (sub-packages are not included).
-     *
-     * @param packages package names, e.g. {@code com.acme.orders}
+     * @param exactPackages packages whose classes are allowed, sub-packages excluded (e.g. {@code com.acme.orders})
+     * @param packagePrefixes packages whose classes and all sub-packages are allowed (e.g. {@code com.acme}); a
+     *        trailing dot is ignored, blank entries are skipped
      */
-    public static void allowExactPackages(Collection<String> packages) {
-        EXACT_PACKAGES.addAll(packages);
-    }
-
-    /**
-     * Allows every class in the given packages and all of their sub-packages.
-     *
-     * @param prefixes package prefixes, e.g. {@code com.acme}
-     */
-    public static void allowPackagePrefixes(Collection<String> prefixes) {
-        for (String prefix : prefixes) {
+    public CacheTypeAllowList(Collection<String> exactPackages, Collection<String> packagePrefixes) {
+        this.exactPackages = Set.copyOf(exactPackages);
+        Set<String> normalized = new HashSet<>();
+        for (String prefix : packagePrefixes) {
             String trimmed = prefix.trim();
             if (trimmed.endsWith(".")) {
                 trimmed = trimmed.substring(0, trimmed.length() - 1);
             }
             if (!trimmed.isEmpty()) {
-                PREFIXES.add(trimmed);
+                normalized.add(trimmed);
             }
         }
+        this.prefixes = Set.copyOf(normalized);
     }
 
-    static boolean isAllowed(String className) {
+    /**
+     * @return an allow-list accepting only the JDK value types (no application packages, no configured prefixes)
+     */
+    public static CacheTypeAllowList jdkOnly() {
+        return new CacheTypeAllowList(Set.of(), Set.of());
+    }
+
+    PolymorphicTypeValidator validator() {
+        return validator;
+    }
+
+    boolean isAllowed(String className) {
         int lastDot = className.lastIndexOf('.');
         if (lastDot < 0) {
             return false; // default package: never produced by the codec
         }
         String pkg = className.substring(0, lastDot);
-        if (JDK_PACKAGES.contains(pkg) || EXACT_PACKAGES.contains(pkg)) {
+        if (JDK_PACKAGES.contains(pkg) || exactPackages.contains(pkg)) {
             return true;
         }
-        for (String prefix : PREFIXES) {
+        for (String prefix : prefixes) {
             if (pkg.equals(prefix) || pkg.startsWith(prefix + ".")) {
                 return true;
             }
@@ -90,7 +98,19 @@ public final class CacheTypeAllowList {
         return false;
     }
 
-    private static final class Validator extends PolymorphicTypeValidator.Base {
+    private Validity check(String className) {
+        if (isAllowed(className)) {
+            return Validity.ALLOWED;
+        }
+        if (reported.add(className)) {
+            LOGGER.warnf("NATS KV cache refused to deserialize class '%s': it is not in an allowed package. "
+                    + "If this class is a legitimate cache key or value type, add its package to "
+                    + "quarkus.nats-cache.allowed-packages", className);
+        }
+        return Validity.DENIED;
+    }
+
+    private final class Validator extends PolymorphicTypeValidator.Base {
 
         private static final long serialVersionUID = 1L;
 
@@ -112,18 +132,6 @@ public final class CacheTypeAllowList {
                 return Validity.ALLOWED;
             }
             return check(type.getRawClass().getName());
-        }
-
-        private static Validity check(String className) {
-            if (isAllowed(className)) {
-                return Validity.ALLOWED;
-            }
-            if (REPORTED.add(className)) {
-                LOGGER.warnf("NATS KV cache refused to deserialize class '%s': it is not in an allowed package. "
-                        + "If this class is a legitimate cache key or value type, add its package to "
-                        + "quarkus.nats-cache.allowed-packages", className);
-            }
-            return Validity.DENIED;
         }
     }
 }

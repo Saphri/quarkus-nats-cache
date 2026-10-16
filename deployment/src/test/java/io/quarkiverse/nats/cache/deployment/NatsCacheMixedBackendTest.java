@@ -118,7 +118,8 @@ class NatsCacheMixedBackendTest {
     void unreadableEntryIsReplaced() throws Exception {
         // Writes are create-only, so an unreadable entry must be purged before its reload can be cached.
         client.nativeConnection().keyValue(NATS_BUCKET)
-                .put(io.quarkiverse.nats.cache.runtime.codec.KeyCodec.encode("corrupt"), "not an envelope".getBytes());
+                .put(new io.quarkiverse.nats.cache.runtime.codec.KeyCodec(
+                        io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList.jdkOnly()).encode("corrupt"), "not an envelope".getBytes());
 
         assertThat(natsCache.get("corrupt", k -> "reloaded").await().atMost(TIMEOUT)).isEqualTo("reloaded");
         assertThat(natsCache.get("corrupt", k -> "NOT CALLED").await().atMost(TIMEOUT)).isEqualTo("reloaded");
