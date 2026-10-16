@@ -53,6 +53,8 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
 
     private final NatsCacheInfo info;
     private final KvBucket bucket;
+    private final KeyCodec keyCodec;
+    private final ValueCodec valueCodec;
 
     /** Longest per-message TTL the KV client accepts (whole seconds as an {@code int}). */
     private static final Duration MAX_TTL = Duration.ofSeconds(Integer.MAX_VALUE);
@@ -66,9 +68,11 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     /** Memoized bucket provisioning result (design D7); cleared on failure so the next operation retries. */
     private volatile CompletableFuture<Void> bucketReady;
 
-    public NatsKvCacheImpl(NatsCacheInfo info, KvBucket bucket) {
+    public NatsKvCacheImpl(NatsCacheInfo info, KvBucket bucket, KeyCodec keyCodec, ValueCodec valueCodec) {
         this.info = Objects.requireNonNull(info, "info must not be null");
         this.bucket = Objects.requireNonNull(bucket, "bucket must not be null");
+        this.keyCodec = Objects.requireNonNull(keyCodec, "keyCodec must not be null");
+        this.valueCodec = Objects.requireNonNull(valueCodec, "valueCodec must not be null");
     }
 
     @Override
@@ -111,7 +115,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
             Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED_MSG);
             // Fail-fast (design D4): names the offending class and rejects over-length encodings; deferred turns
             // any synchronous exception into a failure signal for reactive consumers.
-            String encoded = KeyCodec.encode(key);
+            String encoded = keyCodec.encode(key);
             return ensureBucket()
                     .chain(() -> bucket.get(encoded))
                     .map(stored -> stored.isPresent() ? readEntry(stored.get()) : CacheMiss.INSTANCE)
@@ -135,11 +139,11 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         });
     }
 
-    private static Object readEntry(byte[] payload) {
+    private Object readEntry(byte[] payload) {
         if (payload.length == 0) {
             throw new CacheValueException("Stored cache value is empty"); // foreign data → unreadable
         }
-        return ValueCodec.decode(payload).data(); // undecodable → CacheValueException → reload
+        return valueCodec.decode(payload).data(); // undecodable → CacheValueException → reload
     }
 
     private <K, V> Uni<V> loadSync(K key, Function<K, V> valueLoader) {
@@ -200,7 +204,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     private <V> Uni<V> store(String encoded, V value, Duration messageTtl) {
         // Encoding errors are programming errors (unserializable value) and fail the call; a failed write is a
         // cache outage and does not (fail open): the loaded value is returned, just not cached.
-        byte[] payload = ValueCodec.encode(value);
+        byte[] payload = valueCodec.encode(value);
         return bucket.create(encoded, payload, messageTtl)
                 .onItemOrFailure().transform((result, failure) -> {
                     if (failure != null) {
@@ -220,7 +224,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     public Uni<Void> invalidate(Object key) {
         return Uni.createFrom().deferred(() -> {
             Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED_MSG);
-            String encoded = KeyCodec.encode(key);
+            String encoded = keyCodec.encode(key);
             // purge (not delete): removes the key and all of its history; a no-op for absent keys.
             return ensureBucket().chain(() -> bucket.purge(encoded));
         });
@@ -241,7 +245,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         Objects.requireNonNull(predicate, "predicate must not be null");
         return ensureBucket()
                 .chain(() -> bucket.keys()
-                        .map(NatsKvCacheImpl::decodeStoredKey) // undecodable stored key → WARN + skip, never aborts
+                        .map(this::decodeStoredKey) // undecodable stored key → WARN + skip, never aborts
                         .filter(Optional::isPresent)
                         .map(Optional::get)
                         .filter(pair -> predicate.test(pair.decoded()))
@@ -250,9 +254,9 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
                 .replaceWithVoid();
     }
 
-    private static Optional<StoredKey> decodeStoredKey(String encoded) {
+    private Optional<StoredKey> decodeStoredKey(String encoded) {
         try {
-            return Optional.of(new StoredKey(encoded, KeyCodec.decode(encoded)));
+            return Optional.of(new StoredKey(encoded, keyCodec.decode(encoded)));
         } catch (RuntimeException e) {
             LOGGER.warnf("Skipping stored key that cannot be decoded by the NATS KV cache codec: %s", encoded);
             return Optional.empty(); // a Mutiny mapper must not return null
