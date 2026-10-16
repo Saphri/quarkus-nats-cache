@@ -1,9 +1,9 @@
 package io.quarkiverse.nats.cache.runtime;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -63,9 +63,6 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
      */
     private final Map<String, CompletableFuture<Object>> inFlight = new ConcurrentHashMap<>();
 
-    /** Read-path marker for "no usable entry"; distinct from {@code null}, which is a cached-null result. */
-    private static final Object MISS = new Object();
-
     /** Memoized bucket provisioning result (design D7); cleared on failure so the next operation retries. */
     private volatile CompletableFuture<Void> bucketReady;
 
@@ -117,7 +114,7 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
             String encoded = KeyCodec.encode(key);
             return ensureBucket()
                     .chain(() -> bucket.get(encoded))
-                    .map(stored -> stored.isPresent() ? readEntry(stored.get()) : MISS)
+                    .map(stored -> stored.isPresent() ? readEntry(stored.get()) : CacheMiss.INSTANCE)
                     // Fail open: an unreadable entry (corrupt, refused type, or written by an incompatible class
                     // version) and an unreachable server fall through to the loader like a miss, so a cache problem
                     // costs latency instead of failing the cached method.
@@ -127,12 +124,12 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
                         if (failure instanceof CacheValueException) {
                             // Entries are only created, never overwritten: drop the unreadable entry first so the
                             // reloaded value can take its place. A failed purge just leaves the value uncached.
-                            return bucket.purge(encoded).onFailure().recoverWithNull().replaceWith(MISS);
+                            return bucket.purge(encoded).onFailure().recoverWithNull().replaceWith(CacheMiss.INSTANCE);
                         }
-                        return Uni.createFrom().item(MISS);
+                        return Uni.createFrom().item(CacheMiss.INSTANCE);
                     })
                     // decoded value is an opaque Object; null = cached-null result → suppresses the loader
-                    .flatMap(v -> v == MISS ? loadAndStore(key, encoded, loader, messageTtl)
+                    .flatMap(v -> v instanceof CacheMiss ? loadAndStore(key, encoded, loader, messageTtl)
                             : Uni.createFrom().item(v))
                     .map(v -> (V) v); // unchecked: V is the caller's static type of the cached value
         });
@@ -244,20 +241,21 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
         Objects.requireNonNull(predicate, "predicate must not be null");
         return ensureBucket()
                 .chain(() -> bucket.keys()
-                        // undecodable stored key → WARN + skip, never aborts
-                        .onItem().transformToIterable(NatsKvCacheImpl::decodeStoredKey)
+                        .map(NatsKvCacheImpl::decodeStoredKey) // undecodable stored key → WARN + skip, never aborts
+                        .filter(Optional::isPresent)
+                        .map(Optional::get)
                         .filter(pair -> predicate.test(pair.decoded()))
                         .onItem().call(pair -> bucket.purge(pair.encoded()))
                         .collect().asList())
                 .replaceWithVoid();
     }
 
-    private static List<StoredKey> decodeStoredKey(String encoded) {
+    private static Optional<StoredKey> decodeStoredKey(String encoded) {
         try {
-            return List.of(new StoredKey(encoded, KeyCodec.decode(encoded)));
+            return Optional.of(new StoredKey(encoded, KeyCodec.decode(encoded)));
         } catch (RuntimeException e) {
             LOGGER.warnf("Skipping stored key that cannot be decoded by the NATS KV cache codec: %s", encoded);
-            return List.of(); // a Mutiny mapper must not return null
+            return Optional.empty(); // a Mutiny mapper must not return null
         }
     }
 
@@ -298,6 +296,17 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     }
 
     // ------------------------------------------------------------------ internal types
+
+    /**
+     * Read-path marker for "no usable entry, run the loader". A {@code null} item cannot carry this: it is a
+     * cached-null result, which suppresses the loader. A single shared instance, so a miss allocates nothing.
+     */
+    private static final class CacheMiss {
+        static final CacheMiss INSTANCE = new CacheMiss();
+
+        private CacheMiss() {
+        }
+    }
 
     /** A stored key together with its decoded form, for {@link #invalidateIf(Predicate)}. */
     private record StoredKey(String encoded, Object decoded) {
