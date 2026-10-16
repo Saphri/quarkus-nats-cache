@@ -45,3 +45,17 @@ Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@C
 - Dependabot is active (`.github/dependabot.yml`): `maven` daily, `devcontainers` and `github-actions` weekly. The maven updates also cover the **Maven wrapper** — Dependabot bumps `org.apache.maven:apache-maven` in `.mvn/wrapper/maven-wrapper.properties` (already done: 3.9.14 → 3.9.16) and plugin versions in the poms. Expect these PRs; don't revert or manually fight them.
 - OpenSpec is used for spec-driven changes but is **local-only**: `openspec/` and `.opencode/` are gitignored. Repo-local commands: `/opsx-propose`, `/opsx-explore`, `/opsx-apply`, `/opsx-archive`.
 - Devcontainer (`.devcontainer/devcontainer.json`) defines the intended environment: Java 25 + Mandrel, Maven, docker-in-docker.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`Saphri/quarkus-nats-cache`), managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
