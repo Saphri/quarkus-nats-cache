@@ -1,10 +1,8 @@
 package io.quarkiverse.nats.cache.runtime;
 
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 
@@ -68,7 +66,7 @@ public class NatsCacheBuildRecorder {
                     Client client = clientInstance.get();
                     Map<String, Cache> caches = new HashMap<>(cacheNames.size() + 1);
                     for (String name : cacheNames) {
-                        NatsCacheInfo info = infoFor(name);
+                        NatsCacheInfo info = NatsCacheInfo.resolve(name, config);
                         if (LOGGER.isDebugEnabled()) {
                             LOGGER.debugf("Building NATS KV cache [%s] on bucket [%s]", name, info.bucket());
                         }
@@ -89,13 +87,5 @@ public class NatsCacheBuildRecorder {
     public void allowTypes(Set<String> applicationPackages) {
         CacheTypeAllowList.allowExactPackages(applicationPackages);
         CacheTypeAllowList.allowPackagePrefixes(config.allowedPackages().orElse(List.of()));
-    }
-
-    private NatsCacheInfo infoFor(String name) {
-        NatsCachesBuildTimeConfig.Cache cache = config.caches().get(name);
-        Optional<String> bucket = cache != null ? cache.bucket() : Optional.empty();
-        Optional<Duration> ttl = cache != null ? cache.ttl() : Optional.empty();
-        int history = cache != null ? cache.history() : 1;
-        return NatsCacheInfo.of(name, bucket, ttl, history);
     }
 }
