@@ -62,23 +62,4 @@ public record NatsCacheInfo(String name, String bucket, Optional<Duration> ttl, 
         }
         return sb.toString();
     }
-
-    /**
-     * How long the server keeps the delete marker it leaves when an entry expires (per-message TTL or bucket TTL).
-     * Nothing in the extension reads markers ({@code get} treats them as a miss), so the server minimum is enough.
-     */
-    static final Duration LIMIT_MARKER_TTL = Duration.ofSeconds(1);
-
-    /**
-     * The quarkiverse {@code KeyValueConfiguration} used to provision this cache's bucket (add-if-absent, design D7).
-     * Setting a limit marker is how a KV bucket enables per-message TTLs ({@code allow_msg_ttl}), which carry
-     * per-item expiration (design D6); this requires NATS server 2.11 or later.
-     */
-    public io.quarkiverse.reactive.messaging.nats.jetstream.client.store.configuration.KeyValueConfiguration keyValueConfiguration() {
-        io.nats.client.api.KeyValueConfiguration.Builder builder = io.nats.client.api.KeyValueConfiguration.builder(bucket);
-        ttl.ifPresent(builder::ttl);
-        builder.maxHistoryPerKey(history);
-        builder.limitMarker(LIMIT_MARKER_TTL);
-        return io.quarkiverse.reactive.messaging.nats.jetstream.client.store.configuration.KeyValueConfiguration.of(builder.build());
-    }
 }

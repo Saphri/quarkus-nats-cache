@@ -11,6 +11,7 @@ import java.util.function.Supplier;
 import org.jboss.logging.Logger;
 
 import io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList;
+import io.quarkiverse.nats.cache.runtime.kv.QuarkiverseKvBucket;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.InjectableInstance;
@@ -71,7 +72,7 @@ public class NatsCacheBuildRecorder {
                         if (LOGGER.isDebugEnabled()) {
                             LOGGER.debugf("Building NATS KV cache [%s] on bucket [%s]", name, info.bucket());
                         }
-                        caches.put(name, new NatsKvCacheImpl(info, client));
+                        caches.put(name, new NatsKvCacheImpl(info, new QuarkiverseKvBucket(client, info)));
                     }
                     return new CacheManagerImpl(caches);
                 };
