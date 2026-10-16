@@ -10,7 +10,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
+import io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList;
 import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
+import io.quarkiverse.nats.cache.runtime.codec.ValueCodec;
 import io.quarkus.cache.CacheException;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.helpers.test.UniAssertSubscriber;
@@ -25,7 +27,9 @@ class NatsKvCacheImplTest {
 
     private final FakeKvBucket fake = new FakeKvBucket();
     private final NatsKvCacheImpl cache = new NatsKvCacheImpl(
-            NatsCacheInfo.of("test", Optional.empty(), Optional.empty(), 1), fake);
+            NatsCacheInfo.of("test", Optional.empty(), Optional.empty(), 1), fake,
+            new KeyCodec(CacheTypeAllowList.jdkOnly()), new ValueCodec(CacheTypeAllowList.jdkOnly()));
+    private final KeyCodec keyCodec = new KeyCodec(CacheTypeAllowList.jdkOnly());
 
     private static <T> T await(Uni<T> uni) {
         return uni.await().atMost(Duration.ofSeconds(5));
@@ -134,7 +138,7 @@ class NatsKvCacheImplTest {
         await(cache.invalidate("k"));
 
         assertThat(fake.entries).isEmpty();
-        assertThat(fake.purges).containsExactly(KeyCodec.encode("k"));
+        assertThat(fake.purges).containsExactly(keyCodec.encode("k"));
     }
 
     @Test
@@ -171,8 +175,8 @@ class NatsKvCacheImplTest {
 
         await(cache.invalidateIf(k -> ((String) k).startsWith("drop")));
 
-        assertThat(fake.purges).containsExactlyInAnyOrder(KeyCodec.encode("drop-1"), KeyCodec.encode("drop-2"));
-        assertThat(fake.entries).containsOnlyKeys(KeyCodec.encode("keep"));
+        assertThat(fake.purges).containsExactlyInAnyOrder(keyCodec.encode("drop-1"), keyCodec.encode("drop-2"));
+        assertThat(fake.entries).containsOnlyKeys(keyCodec.encode("keep"));
     }
 
     @Test
@@ -182,7 +186,7 @@ class NatsKvCacheImplTest {
 
         await(cache.invalidateIf(k -> true));
 
-        assertThat(fake.purges).containsExactly(KeyCodec.encode("drop"));
+        assertThat(fake.purges).containsExactly(keyCodec.encode("drop"));
         assertThat(fake.entries).containsOnlyKeys("not a codec key");
     }
 
