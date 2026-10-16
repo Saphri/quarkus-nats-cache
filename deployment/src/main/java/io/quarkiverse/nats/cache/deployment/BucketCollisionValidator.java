@@ -5,7 +5,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -15,7 +14,7 @@ import io.quarkiverse.nats.cache.runtime.NatsCacheInfo;
 import io.quarkus.cache.runtime.CacheBuildConfig;
 
 /**
- * Build-time bucket collision validation (design D8).
+ * Build-time bucket validation (design D8): per-cache settings and bucket collisions.
  *
  * <p>The default name-to-bucket derivation ({@link NatsCacheInfo#defaultBucket(String)}) is not injective: for
  * example {@code my.cache} and {@code my_cache} both derive to {@code MY_CACHE}. When two {@code nats}-typed
@@ -30,28 +29,36 @@ final class BucketCollisionValidator {
     }
 
     /**
+     * Resolves every {@code nats}-typed cache through {@link NatsCacheInfo#resolve} (the same path the runtime
+     * recorder takes), so invalid per-cache settings are reported here too, then checks the resolved buckets for
+     * collisions.
+     *
      * @param cacheNames the cache names referenced by the application (from {@code CacheNamesBuildItem})
      * @param cacheBuildConfig the core cache build-time config ({@code quarkus.cache.type} + per-name overrides)
      * @param natsConfig this extension's build-time config ({@code quarkus.nats-cache.caches.<name>.*})
-     * @return one error message per colliding bucket (empty when no collision exists)
+     * @return one error message per invalid cache setting and per colliding bucket (empty when all is well)
      */
-    static List<String> findCollisions(Set<String> cacheNames, CacheBuildConfig cacheBuildConfig,
+    static List<String> validate(Set<String> cacheNames, CacheBuildConfig cacheBuildConfig,
             NatsCachesBuildTimeConfig natsConfig) {
         Map<String, Set<String>> bucketToCaches = new LinkedHashMap<>();
         Map<String, Boolean> explicitByCache = new LinkedHashMap<>();
+        List<String> errors = new ArrayList<>();
 
         for (String name : cacheNames) {
             if (!NatsCacheBuildRecorder.CACHE_TYPE.equals(typeOf(name, cacheBuildConfig))) {
                 continue; // not a nats cache: another backend's rules apply
             }
-            NatsCachesBuildTimeConfig.Cache settings = natsConfig.caches().get(name);
-            Optional<String> explicitBucket = settings != null ? settings.bucket() : Optional.empty();
-            String bucket = explicitBucket.orElseGet(() -> NatsCacheInfo.defaultBucket(name));
-            bucketToCaches.computeIfAbsent(bucket, b -> new LinkedHashSet<>()).add(name);
-            explicitByCache.put(name, explicitBucket.isPresent());
+            NatsCacheInfo info;
+            try {
+                info = NatsCacheInfo.resolve(name, natsConfig);
+            } catch (IllegalArgumentException e) {
+                errors.add(e.getMessage());
+                continue;
+            }
+            bucketToCaches.computeIfAbsent(info.bucket(), b -> new LinkedHashSet<>()).add(name);
+            explicitByCache.put(name, info.explicitBucket());
         }
 
-        List<String> errors = new ArrayList<>();
         for (Map.Entry<String, Set<String>> entry : bucketToCaches.entrySet()) {
             Set<String> caches = entry.getValue();
             if (caches.size() < 2) {

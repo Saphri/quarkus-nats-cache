@@ -103,9 +103,10 @@ public class NatsCacheProcessor {
     }
 
     /**
-     * Build-time bucket collision validation (design D8): two {@code nats}-typed caches that would end up on
-     * the same bucket because of the default name-to-bucket derivation fail the build, naming both caches and
-     * pointing at the explicit bucket property. Deliberate sharing via explicit {@code bucket=} values is allowed.
+     * Build-time bucket validation (design D8): every {@code nats}-typed cache is resolved exactly as the runtime
+     * recorder resolves it, so an invalid explicit bucket name or history fails the build. Two caches that would end
+     * up on the same bucket because of the default name-to-bucket derivation also fail the build, naming both caches
+     * and pointing at the explicit bucket property. Deliberate sharing via explicit {@code bucket=} values is allowed.
      *
      * <p>Reported as Quarkus validation errors (standard diagnostics, grouped with any other validation
      * failure) instead of a raw {@code DeploymentException}; producing build items also keeps this step in
@@ -115,7 +116,7 @@ public class NatsCacheProcessor {
     void validateBucketCollisions(CacheNamesBuildItem cacheNames, CacheBuildConfig cacheBuildConfig,
             NatsCachesBuildTimeConfig natsConfig,
             BuildProducer<ValidationPhaseBuildItem.ValidationErrorBuildItem> validationErrors) {
-        for (String message : BucketCollisionValidator.findCollisions(cacheNames.getNames(), cacheBuildConfig, natsConfig)) {
+        for (String message : BucketCollisionValidator.validate(cacheNames.getNames(), cacheBuildConfig, natsConfig)) {
             validationErrors.produce(new ValidationPhaseBuildItem.ValidationErrorBuildItem(new IllegalStateException(message)));
         }
     }

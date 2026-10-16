@@ -30,14 +30,17 @@ public class QuarkiverseKvBucket implements KvBucket {
     /** Longest per-message TTL the KV client accepts (whole seconds as an {@code int}). */
     private static final Duration MAX_TTL = Duration.ofSeconds(Integer.MAX_VALUE);
 
-    /** Lifetime of the marker a purge leaves behind (the server minimum). */
-    static final Duration PURGE_MARKER_TTL = Duration.ofSeconds(1);
+    /** Shortest per-message TTL the server accepts; the lifetime of every marker the extension leaves behind. */
+    static final Duration SERVER_MINIMUM_TTL = Duration.ofSeconds(1);
+
+    /** Lifetime of the marker a purge leaves behind. */
+    static final Duration PURGE_MARKER_TTL = SERVER_MINIMUM_TTL;
 
     /**
      * How long the server keeps the delete marker it leaves when an entry expires (per-message TTL or bucket TTL).
      * Nothing in the extension reads markers ({@code get} treats them as a miss), so the server minimum is enough.
      */
-    static final Duration LIMIT_MARKER_TTL = Duration.ofSeconds(1);
+    static final Duration LIMIT_MARKER_TTL = SERVER_MINIMUM_TTL;
 
     private static final byte[] EMPTY = new byte[0];
 
