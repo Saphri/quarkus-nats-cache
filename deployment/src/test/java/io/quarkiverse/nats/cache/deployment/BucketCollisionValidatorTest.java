@@ -1,6 +1,7 @@
 package io.quarkiverse.nats.cache.deployment;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.InstanceOfAssertFactories.STRING;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -25,7 +26,7 @@ class BucketCollisionValidatorTest {
 
     @Test
     void derivedBucketCollisionIsReportedNamingBothCaches() {
-        List<String> errors = BucketCollisionValidator.findCollisions(
+        List<String> errors = BucketCollisionValidator.validate(
                 COLLIDING_NAMES, config("nats", Map.of()), natsConfig(Map.of()));
         assertThat(errors).hasSize(1);
         assertThat(errors.get(0))
@@ -37,7 +38,7 @@ class BucketCollisionValidatorTest {
 
     @Test
     void explicitlySharedBucketIsAllowed() {
-        assertThat(BucketCollisionValidator.findCollisions(
+        assertThat(BucketCollisionValidator.validate(
                 Set.of("alpha", "beta"), config("nats", Map.of()),
                 natsConfig(Map.of("alpha", bucket("SHARED"), "beta", bucket("SHARED")))))
                         .isEmpty();
@@ -47,7 +48,7 @@ class BucketCollisionValidatorTest {
     void explicitBucketCollidingWithDerivedOneIsReported() {
         // 'x' explicitly chooses Y_CACHE while 'y_cache' derives to the same bucket: still an accidental
         // collision (invalidateAll on one cache would wipe the other's entries), so it must be reported.
-        List<String> errors = BucketCollisionValidator.findCollisions(
+        List<String> errors = BucketCollisionValidator.validate(
                 Set.of("x", "y_cache"), config("nats", Map.of()),
                 natsConfig(Map.of("x", bucket("Y_CACHE"))));
         assertThat(errors).hasSize(1);
@@ -60,7 +61,7 @@ class BucketCollisionValidatorTest {
     @Test
     void nonNatsCachesAreIgnored() {
         // Same derived-bucket pattern, but the caches are of another backend type.
-        assertThat(BucketCollisionValidator.findCollisions(
+        assertThat(BucketCollisionValidator.validate(
                 COLLIDING_NAMES, config("caffeine", Map.of()), natsConfig(Map.of())))
                         .isEmpty();
     }
@@ -70,15 +71,36 @@ class BucketCollisionValidatorTest {
         // 'my_cache' is overridden to another backend, so only one nats cache remains on MY_CACHE.
         Map<String, String> overrides = new HashMap<>();
         overrides.put("my_cache", "caffeine");
-        assertThat(BucketCollisionValidator.findCollisions(
+        assertThat(BucketCollisionValidator.validate(
                 COLLIDING_NAMES, config("nats", overrides), natsConfig(Map.of())))
                         .isEmpty();
     }
 
     @Test
     void distinctDerivedBucketsAreFine() {
-        assertThat(BucketCollisionValidator.findCollisions(
+        assertThat(BucketCollisionValidator.validate(
                 Set.of("alpha", "beta"), config("nats", Map.of()), natsConfig(Map.of())))
+                        .isEmpty();
+    }
+
+    @Test
+    void invalidExplicitBucketNameIsReported() {
+        assertThat(BucketCollisionValidator.validate(
+                Set.of("alpha", "beta"), config("nats", Map.of()),
+                natsConfig(Map.of("alpha", bucket("bad.name")))))
+                        .singleElement(STRING)
+                        .contains("quarkus.nats-cache.caches.alpha.bucket")
+                        .contains("'bad.name'")
+                        .contains("is not a valid NATS KV bucket name");
+    }
+
+    @Test
+    void invalidExplicitBucketNameOnNonNatsCacheIsIgnored() {
+        Map<String, String> overrides = new HashMap<>();
+        overrides.put("alpha", "caffeine");
+        assertThat(BucketCollisionValidator.validate(
+                Set.of("alpha", "beta"), config("nats", overrides),
+                natsConfig(Map.of("alpha", bucket("bad.name")))))
                         .isEmpty();
     }
 

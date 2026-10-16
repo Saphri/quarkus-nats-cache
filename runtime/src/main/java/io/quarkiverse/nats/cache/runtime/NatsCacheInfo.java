@@ -11,11 +11,29 @@ import java.util.Optional;
  *        value, or the sanitized uppercase cache name when none is set
  * @param ttl optional bucket-level TTL (hard ceiling for entries), applied at bucket creation
  * @param history maximum number of revisions retained per key (1..64)
+ * @param explicitBucket whether {@code bucket} was configured explicitly rather than derived from the cache name
  */
-public record NatsCacheInfo(String name, String bucket, Optional<Duration> ttl, int history) {
+public record NatsCacheInfo(String name, String bucket, Optional<Duration> ttl, int history, boolean explicitBucket) {
 
     /** NATS KV bucket name charset (subject-safe; verified against the JNats server-side rules). */
     static final String BUCKET_NAME_PATTERN = "[A-Z0-9_-]+";
+
+    /**
+     * The single resolution path from a cache name to its validated info. Both the runtime recorder and the
+     * build-time collision validation go through here, so an invalid setting fails the build instead of the
+     * cache manager's creation at startup.
+     *
+     * @param name the cache name
+     * @param config this extension's configuration ({@code quarkus.nats-cache.caches.<name>.*})
+     * @throws IllegalArgumentException if a configured value is invalid
+     */
+    public static NatsCacheInfo resolve(String name, NatsCachesBuildTimeConfig config) {
+        NatsCachesBuildTimeConfig.Cache cache = config.caches().get(name);
+        if (cache == null) {
+            return of(name, Optional.empty(), Optional.empty(), 1);
+        }
+        return of(name, cache.bucket(), cache.ttl(), cache.history());
+    }
 
     /**
      * Derives the cache info from raw configuration.
@@ -39,7 +57,7 @@ public record NatsCacheInfo(String name, String bucket, Optional<Duration> ttl, 
             throw new IllegalArgumentException(
                     "quarkus.nats-cache.caches." + name + ".history must be between 1 and 64 but was " + history);
         }
-        return new NatsCacheInfo(name, bucket, ttl, history);
+        return new NatsCacheInfo(name, bucket, ttl, history, explicitBucket.isPresent());
     }
 
     /**
