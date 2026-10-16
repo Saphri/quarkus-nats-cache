@@ -86,7 +86,7 @@ class CacheTypeAllowListTest {
         // Two applications in one JVM (test suites, dev-mode restarts) must not widen each other's trust boundary.
         CacheTypeAllowList fixtures = new CacheTypeAllowList(Set.of(CacheTypeAllowListTest.class.getPackageName()),
                 List.of());
-        CacheTypeAllowList jdkOnly = CacheTypeAllowList.jdkOnly();
+        CacheTypeAllowList jdkOnly = new CacheTypeAllowList(Set.of(), List.of());
         byte[] payload = new ValueCodec(fixtures).encode(new Versioned());
 
         assertThat(new ValueCodec(fixtures).decode(payload).data()).isInstanceOf(Versioned.class);
@@ -106,7 +106,7 @@ class CacheTypeAllowListTest {
     void keyCodecsWithDifferentAllowListsDoNotShareTheirValidationMemo() {
         KeyCodec wide = new KeyCodec(new CacheTypeAllowList(Set.of(CacheTypeAllowListTest.class.getPackageName()),
                 List.of()));
-        KeyCodec narrow = new KeyCodec(CacheTypeAllowList.jdkOnly());
+        KeyCodec narrow = new KeyCodec(new CacheTypeAllowList(Set.of(), List.of()));
         Versioned key = new Versioned();
         key.setName("k");
 

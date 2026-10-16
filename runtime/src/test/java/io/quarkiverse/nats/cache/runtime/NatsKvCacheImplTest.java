@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -25,11 +26,14 @@ import io.smallrye.mutiny.subscription.UniEmitter;
  */
 class NatsKvCacheImplTest {
 
+    /** One allow-list for the cache's codecs, as the recorder builds per application. */
+    private static final CacheTypeAllowList JDK_ONLY = new CacheTypeAllowList(Set.of(), Set.of());
+    private static final KeyCodec KEYS = new KeyCodec(JDK_ONLY);
+
     private final FakeKvBucket fake = new FakeKvBucket();
     private final NatsKvCacheImpl cache = new NatsKvCacheImpl(
             NatsCacheInfo.of("test", Optional.empty(), Optional.empty(), 1), fake,
-            new KeyCodec(CacheTypeAllowList.jdkOnly()), new ValueCodec(CacheTypeAllowList.jdkOnly()));
-    private final KeyCodec keyCodec = new KeyCodec(CacheTypeAllowList.jdkOnly());
+            KEYS, new ValueCodec(JDK_ONLY));
 
     private static <T> T await(Uni<T> uni) {
         return uni.await().atMost(Duration.ofSeconds(5));
@@ -138,7 +142,7 @@ class NatsKvCacheImplTest {
         await(cache.invalidate("k"));
 
         assertThat(fake.entries).isEmpty();
-        assertThat(fake.purges).containsExactly(keyCodec.encode("k"));
+        assertThat(fake.purges).containsExactly(KEYS.encode("k"));
     }
 
     @Test
@@ -175,8 +179,8 @@ class NatsKvCacheImplTest {
 
         await(cache.invalidateIf(k -> ((String) k).startsWith("drop")));
 
-        assertThat(fake.purges).containsExactlyInAnyOrder(keyCodec.encode("drop-1"), keyCodec.encode("drop-2"));
-        assertThat(fake.entries).containsOnlyKeys(keyCodec.encode("keep"));
+        assertThat(fake.purges).containsExactlyInAnyOrder(KEYS.encode("drop-1"), KEYS.encode("drop-2"));
+        assertThat(fake.entries).containsOnlyKeys(KEYS.encode("keep"));
     }
 
     @Test
@@ -186,7 +190,7 @@ class NatsKvCacheImplTest {
 
         await(cache.invalidateIf(k -> true));
 
-        assertThat(fake.purges).containsExactly(keyCodec.encode("drop"));
+        assertThat(fake.purges).containsExactly(KEYS.encode("drop"));
         assertThat(fake.entries).containsOnlyKeys("not a codec key");
     }
 

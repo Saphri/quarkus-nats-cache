@@ -3,6 +3,7 @@ package io.quarkiverse.nats.cache.deployment;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
+import java.util.Set;
 
 import jakarta.inject.Inject;
 
@@ -10,6 +11,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import io.quarkiverse.nats.cache.runtime.NatsKvCacheImpl;
+import io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList;
+import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
 import io.quarkiverse.reactive.messaging.nats.jetstream.client.Client;
 import io.quarkus.cache.Cache;
 import io.quarkus.cache.CacheName;
@@ -118,8 +121,8 @@ class NatsCacheMixedBackendTest {
     void unreadableEntryIsReplaced() throws Exception {
         // Writes are create-only, so an unreadable entry must be purged before its reload can be cached.
         client.nativeConnection().keyValue(NATS_BUCKET)
-                .put(new io.quarkiverse.nats.cache.runtime.codec.KeyCodec(
-                        io.quarkiverse.nats.cache.runtime.codec.CacheTypeAllowList.jdkOnly()).encode("corrupt"), "not an envelope".getBytes());
+                .put(new KeyCodec(new CacheTypeAllowList(Set.of(), Set.of())).encode("corrupt"),
+                        "not an envelope".getBytes());
 
         assertThat(natsCache.get("corrupt", k -> "reloaded").await().atMost(TIMEOUT)).isEqualTo("reloaded");
         assertThat(natsCache.get("corrupt", k -> "NOT CALLED").await().atMost(TIMEOUT)).isEqualTo("reloaded");
