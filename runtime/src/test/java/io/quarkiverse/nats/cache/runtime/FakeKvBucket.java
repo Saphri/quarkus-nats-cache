@@ -4,18 +4,21 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import io.quarkiverse.nats.cache.runtime.kv.CreateResult;
 import io.quarkiverse.nats.cache.runtime.kv.KvBucket;
+import io.quarkiverse.nats.cache.runtime.kv.ReadEntry;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
 
 /** In-memory {@link KvBucket} whose operations can be made to fail like an unreachable server. */
 final class FakeKvBucket implements KvBucket {
+
+    /** Stored in {@link #entries} for an entry that {@link #get} reports as unreadable (compared by identity). */
+    private static final byte[] UNREADABLE = new byte[0];
 
     final Map<String, byte[]> entries = new ConcurrentHashMap<>();
     /** The per-item TTL of each successful create, in order ({@code null} = none). */
@@ -32,9 +35,19 @@ final class FakeKvBucket implements KvBucket {
         return Uni.createFrom().failure(new IllegalStateException("connection lost"));
     }
 
+    /** Plants an entry that is present but unreadable, like one without a value. */
+    void plantUnreadable(String encodedKey) {
+        entries.put(encodedKey, UNREADABLE);
+    }
+
     @Override
-    public Uni<Optional<byte[]>> get(String encodedKey) {
-        return readsFail ? connectionLost() : Uni.createFrom().item(Optional.ofNullable(entries.get(encodedKey)));
+    public Uni<ReadEntry> get(String encodedKey) {
+        if (readsFail) {
+            return connectionLost();
+        }
+        byte[] stored = entries.get(encodedKey);
+        return Uni.createFrom().item(stored == null ? ReadEntry.miss()
+                : stored == UNREADABLE ? ReadEntry.unreadable() : ReadEntry.hit(stored));
     }
 
     @Override

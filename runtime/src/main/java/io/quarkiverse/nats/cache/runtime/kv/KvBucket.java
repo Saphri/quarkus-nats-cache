@@ -1,7 +1,6 @@
 package io.quarkiverse.nats.cache.runtime.kv;
 
 import java.time.Duration;
-import java.util.Optional;
 
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
@@ -15,11 +14,12 @@ import io.smallrye.mutiny.Uni;
 public interface KvBucket {
 
     /**
-     * Reads the entry for a key.
+     * Reads the entry for a key. The failure signal means only a transport error, never an unreadable entry.
      *
-     * @return the stored payload (possibly empty), or an empty optional on a miss
+     * @return {@link ReadEntry#hit(byte[]) hit} with the stored payload, {@link ReadEntry#miss() miss} when the key
+     *         holds no live entry, or {@link ReadEntry#unreadable() unreadable} for an entry without a value
      */
-    Uni<Optional<byte[]>> get(String encodedKey);
+    Uni<ReadEntry> get(String encodedKey);
 
     /**
      * Creates an entry; never overwrites a live one (first write wins). A create succeeds over a delete, purge or
