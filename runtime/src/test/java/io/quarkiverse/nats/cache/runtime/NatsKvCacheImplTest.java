@@ -65,6 +65,16 @@ class NatsKvCacheImplTest {
     }
 
     @Test
+    void unreadableEntryIsPurgedBeforeItsReload() {
+        String stored = KEYS.encode("k");
+        fake.plantUnreadable(stored);
+
+        assertThat(await(cache.<String, String> get("k", k -> "reloaded"))).isEqualTo("reloaded");
+        assertThat(fake.purges).containsExactly(stored); // dropped first: entries are never overwritten in place
+        assertThat(await(cache.<String, String> get("k", k -> "not called"))).isEqualTo("reloaded");
+    }
+
+    @Test
     void cancellingTheLoadingCallerDoesNotStrandWaiters() {
         AtomicInteger loads = new AtomicInteger();
         AtomicInteger cancellations = new AtomicInteger();
