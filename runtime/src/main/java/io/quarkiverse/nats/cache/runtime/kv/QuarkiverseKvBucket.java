@@ -4,7 +4,6 @@ import static io.nats.client.support.NatsJetStreamConstants.JS_WRONG_LAST_SEQUEN
 
 import java.time.Duration;
 import java.util.Objects;
-import java.util.Optional;
 
 import io.nats.client.JetStreamApiException;
 import io.nats.client.support.NatsKeyValueUtil;
@@ -20,7 +19,7 @@ import io.smallrye.mutiny.Uni;
  * {@link KvBucket} over the quarkiverse nats-jetstream {@link Client} (and raw JNats for the whole-bucket purge).
  *
  * <p>Absorbs the transport quirks so the cache sees clean outcomes: a miss arrives as a {@code null} item and
- * becomes an empty optional; a create refused with {@code 10071} (wrong last sequence) becomes
+ * becomes {@link ReadEntry#miss()}, an entry without a value becomes {@link ReadEntry#unreadable()}; a create refused with {@code 10071} (wrong last sequence) becomes
  * {@link CreateResult#ALREADY_CACHED}; quarkiverse only offers create with a TTL, so an entry without one is written
  * with the longest TTL the client accepts; purge markers carry a short TTL, with a plain-purge fallback for buckets
  * that do not allow per-message TTLs.
@@ -42,8 +41,6 @@ public class QuarkiverseKvBucket implements KvBucket {
      */
     static final Duration LIMIT_MARKER_TTL = SERVER_MINIMUM_TTL;
 
-    private static final byte[] EMPTY = new byte[0];
-
     private final Client client;
     private final NatsCacheInfo info;
     private final KeyValue kv;
@@ -55,10 +52,10 @@ public class QuarkiverseKvBucket implements KvBucket {
     }
 
     @Override
-    public Uni<Optional<byte[]>> get(String encodedKey) {
-        // quarkiverse reports a miss as a null item; an entry without a value surfaces as an empty payload.
-        return kv.get(encodedKey).map(entry -> entry == null ? Optional.empty()
-                : Optional.of(entry.value().orElse(EMPTY)));
+    public Uni<ReadEntry> get(String encodedKey) {
+        // quarkiverse reports a miss as a null item; an entry without a value was not written by this extension.
+        return kv.get(encodedKey).map(entry -> entry == null ? ReadEntry.miss()
+                : entry.value().map(ReadEntry::hit).orElseGet(ReadEntry::unreadable));
     }
 
     @Override
