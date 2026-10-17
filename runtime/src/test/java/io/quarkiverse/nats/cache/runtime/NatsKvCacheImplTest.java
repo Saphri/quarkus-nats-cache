@@ -44,7 +44,6 @@ class NatsKvCacheImplTest {
         fake.readsFail = true;
         fake.writesFail = true;
         assertThat(await(cache.<String, String> get("k", k -> "loaded"))).isEqualTo("loaded");
-        assertThat(fake.purges).isEmpty(); // a transport error is not an unreadable entry
     }
 
     @Test

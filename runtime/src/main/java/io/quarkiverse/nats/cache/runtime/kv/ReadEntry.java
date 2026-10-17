@@ -3,28 +3,39 @@ package io.quarkiverse.nats.cache.runtime.kv;
 import java.util.Objects;
 
 /**
- * Outcome of {@link KvBucket#get}: the read result for one entry. Exactly one of three states:
+ * Outcome of {@link KvBucket#get}: the read entry for one key, in exactly one of three declared states.
  * <ul>
- * <li>{@link #hit(byte[])} — the key holds an entry with a payload (still opaque bytes: decoding stays on the cache
+ * <li>{@link #hit(byte[])}: the key holds an entry with a payload (still opaque bytes: decoding stays on the cache
  * side);</li>
- * <li>{@link #miss()} — the key holds no live entry;</li>
- * <li>{@link #unreadable()} — the key holds an entry this application cannot read (for example one without a
- * value); the cache purges it before its reload is stored.</li>
+ * <li>{@link #miss()}: the key holds no live entry;</li>
+ * <li>{@link #unreadable()}: the key holds an entry this application cannot read; the cache purges it before its
+ * reload is stored.</li>
  * </ul>
  * The factory methods are the only construction path, so a hit always carries a payload and the other states never
  * do. Miss and unreadable are shared instances: a miss allocates nothing.
  */
-public abstract sealed class ReadEntry {
+public final class ReadEntry {
 
-    private static final ReadEntry MISS = new Miss();
-    private static final ReadEntry UNREADABLE = new Unreadable();
+    private enum State {
+        HIT,
+        MISS,
+        UNREADABLE
+    }
 
-    private ReadEntry() {
+    private static final ReadEntry MISS = new ReadEntry(State.MISS, null);
+    private static final ReadEntry UNREADABLE = new ReadEntry(State.UNREADABLE, null);
+
+    private final State state;
+    private final byte[] payload;
+
+    private ReadEntry(State state, byte[] payload) {
+        this.state = state;
+        this.payload = payload;
     }
 
     /** An entry with a payload. */
     public static ReadEntry hit(byte[] payload) {
-        return new Hit(Objects.requireNonNull(payload, "payload must not be null"));
+        return new ReadEntry(State.HIT, Objects.requireNonNull(payload, "payload must not be null"));
     }
 
     /** No live entry for the key. */
@@ -38,11 +49,11 @@ public abstract sealed class ReadEntry {
     }
 
     public boolean isHit() {
-        return false;
+        return state == State.HIT;
     }
 
     public boolean isUnreadable() {
-        return false;
+        return state == State.UNREADABLE;
     }
 
     /**
@@ -51,48 +62,9 @@ public abstract sealed class ReadEntry {
      * @throws IllegalStateException if this is not a hit
      */
     public byte[] payload() {
-        throw new IllegalStateException("Not a hit: " + this);
-    }
-
-    private static final class Hit extends ReadEntry {
-        private final byte[] payload;
-
-        Hit(byte[] payload) {
-            this.payload = payload;
+        if (state != State.HIT) {
+            throw new IllegalStateException("Not a hit: " + state);
         }
-
-        @Override
-        public boolean isHit() {
-            return true;
-        }
-
-        @Override
-        public byte[] payload() {
-            return payload;
-        }
-
-        @Override
-        public String toString() {
-            return "hit(" + payload.length + " bytes)";
-        }
-    }
-
-    private static final class Miss extends ReadEntry {
-        @Override
-        public String toString() {
-            return "miss";
-        }
-    }
-
-    private static final class Unreadable extends ReadEntry {
-        @Override
-        public boolean isUnreadable() {
-            return true;
-        }
-
-        @Override
-        public String toString() {
-            return "unreadable";
-        }
+        return payload;
     }
 }
