@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -17,10 +18,9 @@ import io.smallrye.mutiny.Uni;
 /** In-memory {@link KvBucket} whose operations can be made to fail like an unreachable server. */
 final class FakeKvBucket implements KvBucket {
 
-    /** Stored in {@link #entries} for an entry that {@link #get} reports as unreadable (compared by identity). */
-    private static final byte[] UNREADABLE = new byte[0];
-
     final Map<String, byte[]> entries = new ConcurrentHashMap<>();
+    /** Keys holding an entry that {@link #get} reports as unreadable. */
+    final Set<String> unreadable = ConcurrentHashMap.newKeySet();
     /** The per-item TTL of each successful create, in order ({@code null} = none). */
     final List<Duration> createTtls = new CopyOnWriteArrayList<>();
     final List<String> purges = new CopyOnWriteArrayList<>();
@@ -37,7 +37,8 @@ final class FakeKvBucket implements KvBucket {
 
     /** Plants an entry that is present but unreadable, like one without a value. */
     void plantUnreadable(String encodedKey) {
-        entries.put(encodedKey, UNREADABLE);
+        entries.remove(encodedKey);
+        unreadable.add(encodedKey);
     }
 
     @Override
@@ -45,9 +46,11 @@ final class FakeKvBucket implements KvBucket {
         if (readsFail) {
             return connectionLost();
         }
+        if (unreadable.contains(encodedKey)) {
+            return Uni.createFrom().item(ReadEntry.unreadable());
+        }
         byte[] stored = entries.get(encodedKey);
-        return Uni.createFrom().item(stored == null ? ReadEntry.miss()
-                : stored == UNREADABLE ? ReadEntry.unreadable() : ReadEntry.hit(stored));
+        return Uni.createFrom().item(stored == null ? ReadEntry.miss() : ReadEntry.hit(stored));
     }
 
     @Override
@@ -55,7 +58,7 @@ final class FakeKvBucket implements KvBucket {
         if (writesFail) {
             return connectionLost();
         }
-        if (entries.putIfAbsent(encodedKey, payload) != null) {
+        if (unreadable.contains(encodedKey) || entries.putIfAbsent(encodedKey, payload) != null) {
             return Uni.createFrom().item(CreateResult.ALREADY_CACHED);
         }
         createTtls.add(perItemTtlOrNull);
@@ -66,12 +69,15 @@ final class FakeKvBucket implements KvBucket {
     public Uni<Void> purge(String encodedKey) {
         purges.add(encodedKey);
         entries.remove(encodedKey);
+        unreadable.remove(encodedKey);
         return Uni.createFrom().voidItem();
     }
 
     @Override
     public Multi<String> keys() {
-        return Multi.createFrom().iterable(new ArrayList<>(entries.keySet()));
+        List<String> keys = new ArrayList<>(entries.keySet());
+        keys.addAll(unreadable);
+        return Multi.createFrom().iterable(keys);
     }
 
     @Override
@@ -87,6 +93,7 @@ final class FakeKvBucket implements KvBucket {
         }
         purgeAlls.incrementAndGet();
         entries.clear();
+        unreadable.clear();
         return Uni.createFrom().voidItem();
     }
 }

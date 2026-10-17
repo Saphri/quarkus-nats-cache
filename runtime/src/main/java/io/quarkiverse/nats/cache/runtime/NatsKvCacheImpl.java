@@ -126,36 +126,33 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
                                 info.name(), failure.toString());
                         return ReadEntry.miss();
                     })
-                    .chain(read -> {
-                        if (read.isHit()) {
-                            return decodeOrReload(read.payload(), key, encoded, loader, messageTtl);
-                        }
-                        if (read.isUnreadable()) {
-                            LOGGER.warnf("NATS KV cache [%s]: stored entry is unreadable, replacing it with the "
-                                    + "loaded value", info.name());
-                            return purgeThenReload(key, encoded, loader, messageTtl);
-                        }
-                        return loadAndStore(key, encoded, loader, messageTtl);
-                    });
+                    .chain(read -> resolve(read, key, encoded, loader, messageTtl));
         });
     }
 
     /**
-     * Decodes a hit. A payload this application's codec cannot decode (corrupt, refused type, or written by an
-     * incompatible class version) is an unreadable entry too, detected on this side of the seam.
+     * Branches once over the read entry. A hit whose payload this application's codec cannot decode (corrupt,
+     * refused type, or written by an incompatible class version) becomes an unreadable entry too: the adapter and
+     * the codec are two detectors of the same outcome.
      */
-    private <K, V> Uni<V> decodeOrReload(byte[] payload, K key, String encoded, Function<K, Uni<V>> loader,
+    private <K, V> Uni<V> resolve(ReadEntry read, K key, String encoded, Function<K, Uni<V>> loader,
             Duration messageTtl) {
-        Object value;
-        try {
-            value = valueCodec.decode(payload).data();
-        } catch (CacheValueException e) {
-            LOGGER.warnf("NATS KV cache [%s]: stored entry is unreadable, replacing it with the loaded value: %s",
-                    info.name(), e.toString());
+        String unreadableCause = "entry has no value";
+        if (read.isHit()) {
+            try {
+                // null = cached-null result → suppresses the loader; unchecked: V is the caller's static type
+                return Uni.createFrom().item((V) valueCodec.decode(read.payload()).data());
+            } catch (CacheValueException e) {
+                read = ReadEntry.unreadable();
+                unreadableCause = e.toString();
+            }
+        }
+        if (read.isUnreadable()) {
+            LOGGER.warnf("NATS KV cache [%s]: read failed, falling back to the value loader: unreadable entry (%s)",
+                    info.name(), unreadableCause);
             return purgeThenReload(key, encoded, loader, messageTtl);
         }
-        // null = cached-null result → suppresses the loader; unchecked: V is the caller's static type of the value
-        return Uni.createFrom().item((V) value);
+        return loadAndStore(key, encoded, loader, messageTtl);
     }
 
     /**
