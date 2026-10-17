@@ -16,6 +16,7 @@ import io.quarkiverse.nats.cache.runtime.codec.KeyCodec;
 import io.quarkiverse.nats.cache.runtime.codec.ValueCodec;
 import io.quarkiverse.nats.cache.runtime.kv.CreateResult;
 import io.quarkiverse.nats.cache.runtime.kv.KvBucket;
+import io.quarkiverse.nats.cache.runtime.kv.ReadEntry;
 import io.quarkus.cache.Cache;
 import io.quarkus.cache.CacheException;
 import io.quarkus.cache.runtime.AbstractCache;
@@ -118,32 +119,52 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
             String encoded = keyCodec.encode(key);
             return ensureBucket()
                     .chain(() -> bucket.get(encoded))
-                    .map(stored -> stored.isPresent() ? readEntry(stored.get()) : CacheMiss.INSTANCE)
-                    // Fail open: an unreadable entry (corrupt, refused type, or written by an incompatible class
-                    // version) and an unreachable server fall through to the loader like a miss, so a cache problem
-                    // costs latency instead of failing the cached method.
-                    .onFailure().recoverWithUni(failure -> {
+                    // Fail open: an unreachable server falls through to the loader like a miss, so a cache problem
+                    // costs latency instead of failing the cached method. A transport error never purges.
+                    .onFailure().recoverWithItem(failure -> {
                         LOGGER.warnf("NATS KV cache [%s]: read failed, falling back to the value loader: %s",
                                 info.name(), failure.toString());
-                        if (failure instanceof CacheValueException) {
-                            // Entries are only created, never overwritten: drop the unreadable entry first so the
-                            // reloaded value can take its place. A failed purge just leaves the value uncached.
-                            return bucket.purge(encoded).onFailure().recoverWithNull().replaceWith(CacheMiss.INSTANCE);
-                        }
-                        return Uni.createFrom().item(CacheMiss.INSTANCE);
+                        return ReadEntry.miss();
                     })
-                    // decoded value is an opaque Object; null = cached-null result → suppresses the loader
-                    .flatMap(v -> v instanceof CacheMiss ? loadAndStore(key, encoded, loader, messageTtl)
-                            : Uni.createFrom().item(v))
-                    .map(v -> (V) v); // unchecked: V is the caller's static type of the cached value
+                    .chain(read -> {
+                        if (read.isHit()) {
+                            return decodeOrReload(read.payload(), key, encoded, loader, messageTtl);
+                        }
+                        if (read.isUnreadable()) {
+                            LOGGER.warnf("NATS KV cache [%s]: stored entry is unreadable, replacing it with the "
+                                    + "loaded value", info.name());
+                            return purgeThenReload(key, encoded, loader, messageTtl);
+                        }
+                        return loadAndStore(key, encoded, loader, messageTtl);
+                    });
         });
     }
 
-    private Object readEntry(byte[] payload) {
-        if (payload.length == 0) {
-            throw new CacheValueException("Stored cache value is empty"); // foreign data → unreadable
+    /**
+     * Decodes a hit. A payload this application's codec cannot decode (corrupt, refused type, or written by an
+     * incompatible class version) is an unreadable entry too, detected on this side of the seam.
+     */
+    private <K, V> Uni<V> decodeOrReload(byte[] payload, K key, String encoded, Function<K, Uni<V>> loader,
+            Duration messageTtl) {
+        Object value;
+        try {
+            value = valueCodec.decode(payload).data();
+        } catch (CacheValueException e) {
+            LOGGER.warnf("NATS KV cache [%s]: stored entry is unreadable, replacing it with the loaded value: %s",
+                    info.name(), e.toString());
+            return purgeThenReload(key, encoded, loader, messageTtl);
         }
-        return valueCodec.decode(payload).data(); // undecodable → CacheValueException → reload
+        // null = cached-null result → suppresses the loader; unchecked: V is the caller's static type of the value
+        return Uni.createFrom().item((V) value);
+    }
+
+    /**
+     * Entries are only created, never overwritten: drop the unreadable entry first so the reloaded value can take
+     * its place. A failed purge just leaves the value uncached.
+     */
+    private <K, V> Uni<V> purgeThenReload(K key, String encoded, Function<K, Uni<V>> loader, Duration messageTtl) {
+        return bucket.purge(encoded).onFailure().recoverWithNull()
+                .chain(() -> loadAndStore(key, encoded, loader, messageTtl));
     }
 
     private <K, V> Uni<V> loadSync(K key, Function<K, V> valueLoader) {
@@ -300,17 +321,6 @@ public class NatsKvCacheImpl extends AbstractCache implements Cache {
     }
 
     // ------------------------------------------------------------------ internal types
-
-    /**
-     * Read-path marker for "no usable entry, run the loader". A {@code null} item cannot carry this: it is a
-     * cached-null result, which suppresses the loader. A single shared instance, so a miss allocates nothing.
-     */
-    private static final class CacheMiss {
-        static final CacheMiss INSTANCE = new CacheMiss();
-
-        private CacheMiss() {
-        }
-    }
 
     /** A stored key together with its decoded form, for {@link #invalidateIf(Predicate)}. */
     private record StoredKey(String encoded, Object decoded) {

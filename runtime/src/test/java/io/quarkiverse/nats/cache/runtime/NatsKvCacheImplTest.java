@@ -44,6 +44,7 @@ class NatsKvCacheImplTest {
         fake.readsFail = true;
         fake.writesFail = true;
         assertThat(await(cache.<String, String> get("k", k -> "loaded"))).isEqualTo("loaded");
+        assertThat(fake.purges).isEmpty(); // a transport error is not an unreadable entry
     }
 
     @Test
@@ -58,6 +59,16 @@ class NatsKvCacheImplTest {
         assertThat(await(cache.<String, String> get("k", k -> "first"))).isEqualTo("first");
         String stored = fake.entries.keySet().iterator().next();
         fake.entries.put(stored, "{\"data\":{\"@class\":\"com.example.Gadget\"}}".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(await(cache.<String, String> get("k", k -> "reloaded"))).isEqualTo("reloaded");
+        assertThat(fake.purges).containsExactly(stored); // dropped first: entries are never overwritten in place
+        assertThat(await(cache.<String, String> get("k", k -> "not called"))).isEqualTo("reloaded");
+    }
+
+    @Test
+    void unreadableEntryIsPurgedBeforeItsReload() {
+        String stored = KEYS.encode("k");
+        fake.plantUnreadable(stored);
 
         assertThat(await(cache.<String, String> get("k", k -> "reloaded"))).isEqualTo("reloaded");
         assertThat(fake.purges).containsExactly(stored); // dropped first: entries are never overwritten in place
