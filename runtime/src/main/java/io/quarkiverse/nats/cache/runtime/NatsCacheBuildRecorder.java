@@ -64,7 +64,7 @@ public class NatsCacheBuildRecorder {
                     InjectableInstance<Client> clientInstance = Arc.container().select(Client.class);
                     if (clientInstance.isUnsatisfied()) {
                         throw new CacheException("No NATS JetStream 'Client' bean is available for the nats cache "
-                                + "backend; ensure the quarkus-messaging-nats-jetstream extension is on the classpath "
+                                + "backend; ensure the quarkus-nats-jetstream-client extension is on the classpath "
                                 + "and a NATS data source is configured (quarkus.messaging.nats.*)", null);
                     }
                     Client client = clientInstance.get();
