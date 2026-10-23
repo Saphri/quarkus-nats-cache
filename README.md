@@ -5,8 +5,8 @@ standard Quarkus cache API — `@CacheResult`, `@CacheInvalidate`, `@CacheInvali
 `io.quarkus.cache.Cache` interface. Entries live in a shared, server-side KV bucket, so every node of a
 cluster reads and writes the same cache without any extra coordination.
 
-The extension builds on the Quarkiverse [`quarkus-reactive-messaging-nats-jetstream`](https://github.com/quarkiverse/quarkus-nats)
-extension: connection lifecycle, auth/TLS, the NATS JetStream **dev service** (zero-config local dev and test),
+The extension builds on the Quarkiverse [`quarkus-nats-jetstream-client`](https://github.com/quarkiverse/quarkus-nats)
+client extension (the messaging-free split of `quarkus-reactive-messaging-nats-jetstream`): connection lifecycle, auth/TLS, the NATS JetStream **dev service** (zero-config local dev and test),
 and native-image support all come from there.
 
 ## Features
@@ -26,7 +26,7 @@ and native-image support all come from there.
 
 ## Requirements
 
-- Quarkus **3.40.x** or later (tested against 3.40.0)
+- Quarkus **4.0.0.Beta1** (the `4.x` line; this extension is built against Quarkus `4.0.0.Beta1`)
 - A running NATS server **2.11 or later** (per-message TTL support) with JetStream enabled in production; in `dev`/`test` modes a
   [Docker](https://www.docker.com/) container is started automatically when no server is configured
 
@@ -153,7 +153,7 @@ change what the application reads back.
 ### Connection settings (underlying extension)
 
 Connection, authentication, TLS and named data-sources are configured through the underlying
-`quarkus-reactive-messaging-nats-jetstream` extension (`quarkus.messaging.nats.*`); see its documentation.
+`quarkus-nats-jetstream-client` extension (`quarkus.messaging.nats.*`); see its documentation.
 In `dev`/`test` modes with Docker available and no server configured, the dev service starts a NATS JetStream
 container automatically — no manual setup needed.
 
@@ -284,7 +284,7 @@ Every entry carries a `Nats-TTL` header (the per-item duration, or about 68 year
 ## Limitations
 
 - **Quarkiverse dependency.** The extension builds on the Quarkiverse
-  `quarkus-reactive-messaging-nats-jetstream` extension, so it cannot be upstreamed into Quarkus core. Its
+  `quarkus-nats-jetstream-client` extension, so it cannot be upstreamed into Quarkus core. Its
   release cadence is an external dependency (a known-good version is pinned in this project).
 - **Remote round-trip per read.** v1 has no local L1 cache layer; every read is a network call to the KV
   bucket. A Caffeine L1 with KV-watch-driven eviction is on the roadmap for a future version.

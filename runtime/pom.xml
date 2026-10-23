@@ -14,20 +14,31 @@
   <name>Quarkus NATS KV Cache - Runtime</name>
 
   <dependencies>
-    <!-- Connection lifecycle, reactive KeyValue API, dev service, native-image delegates -->
+    <!-- Connection lifecycle, KV store API, dev service, native-image delegates (client extension: no
+         Reactive Messaging overhead) -->
     <dependency>
       <groupId>io.quarkiverse.reactivemessaging.nats-jetstream</groupId>
-      <artifactId>quarkus-messaging-nats-jetstream</artifactId>
+      <artifactId>quarkus-nats-jetstream-client</artifactId>
     </dependency>
     <!-- The cache seam: io.quarkus.cache.Cache, AbstractCache, CacheManagerInfo -->
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-cache</artifactId>
     </dependency>
-    <!-- Jackson for the key/value codecs -->
+    <!-- Jackson 2.x directly for the key/value codecs: Quarkus 4.x's io.quarkus:quarkus-jackson
+         wraps Jackson 3 (tools.jackson.*), whose DefaultTyping has no EVERYTHING mode — the codec
+         depends on it (see NatsCacheJson javadoc). The BOM still pins these Jackson 2 packages. -->
     <dependency>
-      <groupId>io.quarkus</groupId>
-      <artifactId>quarkus-jackson</artifactId>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.datatype</groupId>
+      <artifactId>jackson-datatype-jsr310</artifactId>
     </dependency>
 
     <dependency>
