@@ -131,6 +131,9 @@ name (e.g. `my.cache` and `my_cache` both map to `MY_CACHE`), the **build fails*
 caches — to share a bucket deliberately, set an explicit `bucket=` on *each* of them; an explicit bucket next
 to a derived one is still treated as an accidental collision.
 
+Sharing a bucket means sharing invalidation: `invalidateAll()` and `invalidateIf(predicate)` work on the whole
+bucket, so they remove the other cache's entries too. Only `invalidate(key)` is scoped to a key you address.
+
 ### Allowed key and value types
 
 | Property | Default | Description |
