@@ -53,7 +53,8 @@ public class QuarkiverseKvBucket implements KvBucket {
 
     @Override
     public Uni<ReadEntry> get(String encodedKey) {
-        // quarkiverse reports a miss as a null item; an entry without a value was not written by this extension.
+        // quarkiverse reports a miss as a null item, and a marker (purge, delete or expiry) never surfaces at all:
+        // verified by NatsCachePurgeMarkerTest. An entry without a value is one this extension did not write.
         return kv.get(encodedKey).map(entry -> entry == null ? ReadEntry.miss()
                 : entry.value().map(ReadEntry::hit).orElseGet(ReadEntry::unreadable));
     }
