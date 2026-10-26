@@ -44,14 +44,14 @@
 
   <properties>
     <compiler-plugin.version>3.16.0</compiler-plugin.version>
-    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <!-- Quarkus platform version (BOM + extension-descriptor plugin) -->
-    <quarkus.version>4.0.0.Beta1</quarkus.version>
+    <quarkus.version>3.40.1.1</quarkus.version>
     <!-- Quarkiverse NATS JetStream client extension (client-only split of reactive-messaging-nats-jetstream:
          connection lifecycle, KV store API, dev service, native-image delegates; no Reactive Messaging stack). -->
-    <version.io.quarkiverse.reactivemessaging.nats-jetstream>4.0.0.Beta1</version.io.quarkiverse.reactivemessaging.nats-jetstream>
+    <version.io.quarkiverse.reactivemessaging.nats-jetstream>3.40.10</version.io.quarkiverse.reactivemessaging.nats-jetstream>
     <!-- Not managed by quarkus-bom; version matches the Quarkiverse parent POM. -->
     <assertj-core.version>3.27.7</assertj-core.version>
   </properties>
