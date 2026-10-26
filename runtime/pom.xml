@@ -25,9 +25,9 @@
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-cache</artifactId>
     </dependency>
-    <!-- Jackson 2.x directly for the key/value codecs: Quarkus 4.x's io.quarkus:quarkus-jackson
-         wraps Jackson 3 (tools.jackson.*), whose DefaultTyping has no EVERYTHING mode — the codec
-         depends on it (see NatsCacheJson javadoc). The BOM still pins these Jackson 2 packages. -->
+    <!-- Jackson 2.x directly for the key/value codecs: the codec depends on DefaultTyping.EVERYTHING,
+         a Jackson 2 feature (see NatsCacheJson javadoc; Jackson 3, wrapped by io.quarkus:quarkus-jackson
+         if we move to Quarkus 4.x, has no such mode). The 3.40 BOM pins these Jackson 2 packages. -->
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-core</artifactId>
