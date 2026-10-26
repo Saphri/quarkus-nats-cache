@@ -26,7 +26,7 @@ and native-image support all come from there.
 
 ## Requirements
 
-- Quarkus **4.0.0.Beta1** (the `4.x` line; this extension is built against Quarkus `4.0.0.Beta1`)
+- Quarkus **3.40.x** (this extension is built against Quarkus `3.40.1.1`, pinning `quarkus-nats-jetstream-client` `3.40.10`)
 - A running NATS server **2.11 or later** (per-message TTL support) with JetStream enabled in production; in `dev`/`test` modes a
   [Docker](https://www.docker.com/) container is started automatically when no server is configured
 
