@@ -48,7 +48,7 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <!-- Quarkus platform version (BOM + extension-descriptor plugin) -->
-    <quarkus.version>3.40.1.1</quarkus.version>
+    <quarkus.version>3.40.1.2</quarkus.version>
     <!-- Quarkiverse NATS JetStream client extension (client-only split of reactive-messaging-nats-jetstream:
          connection lifecycle, KV store API, dev service, native-image delegates; no Reactive Messaging stack). -->
     <version.io.quarkiverse.reactivemessaging.nats-jetstream>3.40.14</version.io.quarkiverse.reactivemessaging.nats-jetstream>
