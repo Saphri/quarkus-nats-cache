@@ -33,7 +33,7 @@ Always use `./mvnw` (wrapper version pinned in `.mvn/wrapper/maven-wrapper.prope
 - **CodeQL (`codeql.yml`)**: uses `build-mode: none` (source scan only, no Maven compilation).
 - **Standalone parent POM**: root `pom.xml` deliberately does **not** inherit `io.quarkus:quarkus-extensions-parent` (its grandparent imports `quarkus-bom:${project.version}`, breaking resolution against `999-SNAPSHOT`). Keep the standalone parent and explicit `quarkus-bom` import.
 - **Project version**: POMs use `999-SNAPSHOT` (Quarkiverse convention); `README.md` still shows `1.0.0-SNAPSHOT` and is stale.
-- **Unmanaged pins & Dependabot**: `quarkus-nats-jetstream-client` and `assertj-core` are not in `quarkus-bom` and are pinned in root `pom.xml`. `.github/dependabot.yml` ignores `4.x` for `io.quarkus:*` and `io.quarkiverse.reactivemessaging.nats-jetstream:*`.
+- **Unmanaged pins & Dependabot**: `quarkus-nats-jetstream-client` and `assertj-core` are not in `quarkus-bom` and are pinned in root `pom.xml`. `.github/dependabot.yml` ignores major updates (`version-update:semver-major`) for `io.quarkus:*` and `io.quarkiverse.reactivemessaging.nats-jetstream:*`.
 - **Jackson 2 dependency (`runtime/pom.xml`, `NatsCacheJson`)**: codecs require Jackson 2 `ObjectMapper.DefaultTyping.EVERYTHING` (`NON_FINAL_AND_ENUMS` fails for final POJOs and `List.of`/`Map.of`). Keep direct `com.fasterxml.jackson.*` dependencies rather than `io.quarkus:quarkus-jackson` (which wraps Jackson 3 in Quarkus 4.x) unless redesigning the codec.
 
 ## Architecture & design constraints
