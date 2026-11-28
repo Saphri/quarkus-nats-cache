@@ -1,63 +1,59 @@
 # AGENTS.md
 
-Quarkus extension: NATS JetStream KV as a backend for the Quarkus cache API (`@CacheResult`, `io.quarkus.cache.Cache`). User-facing docs live in `README.md`; this file is working context for agents.
+Quarkus extension providing NATS JetStream KV as a backend for the Quarkus cache API (`@CacheResult`, `io.quarkus.cache.Cache`). User docs live in `README.md`.
 
-## Build & test (Maven wrapper only)
+## Build & test
 
-- Always use `./mvnw` (pins the Maven version in `.mvn/wrapper/maven-wrapper.properties`; Dependabot keeps it current). No local Maven needed.
-- `./mvnw install` — builds all modules and runs both unit suites. Needs **Docker running** for the deployment suite (see below).
-- Single test: `./mvnw -pl runtime test -Dtest=KeyCodecTest` (or `-Dtest=Class#method`). Same pattern for `-pl deployment`.
-- Integration tests are **skipped by default** (`skipITs=true` in `integration-tests/pom.xml`). Run them explicitly, after `./mvnw install` (the IT module resolves the extension from the local repo):
-  - JVM jar: `./mvnw -pl integration-tests verify -DskipITs=false`
-  - Native image: `./mvnw install -DskipTests && ./mvnw -pl integration-tests verify -Dnative` (needs `native-image` on PATH; devcontainer ships Mandrel)
+Always use `./mvnw` (wrapper version pinned in `.mvn/wrapper/maven-wrapper.properties`), even though the devcontainer also installs system Maven.
 
-## CI (GitHub Actions)
-
-- `.github/workflows/build.yml` (push to main + PRs, ubuntu, JDK 17 Temurin): `./mvnw -B clean install -Dno-format`, then the native step `./mvnw -B install -Dnative -Dquarkus.native.container-build -Dnative.surefire.skip`. JDK 17 is fine for the 3.40 line; if we ever go back to Quarkus 4.x, CI needs JDK ≥ 21 (25 recommended) — the 4.x `quarkus-extension-processor` annotation processor fails to load on 17 (class file version 65 vs 61).
-- The `native-image` profile in `integration-tests/pom.xml` reads `${native.surefire.skip}`, which **no pom defines** — CI passes it as a flag. Mirror that when running `-Dnative` locally, or surefire's skip setting silently stays unresolved.
-- `.github/workflows/codeql.yml`: CodeQL for Java with `build-mode: none` (no compile step; enables incremental overlay scans on PRs).
+- **Full unit build**: `./mvnw install` (CI runs `./mvnw -B clean install -Dno-format`). Builds all modules and runs `runtime` and `deployment` tests; skips `integration-tests` (`<skipITs>true</skipITs>`).
+- **Single unit test**: `./mvnw -pl runtime test -Dtest=KeyCodecTest` (or `Class#method`).
+- **Integration tests (JVM)**: run `./mvnw install` first (`integration-tests` resolves the extension from the local Maven repo), then:
+  `./mvnw -pl integration-tests verify -DskipITs=false`
+- **Native build + ITs (CI flags)**:
+  `./mvnw -B install -Dnative -Dquarkus.native.container-build -Dnative.surefire.skip`
+  - `-Dnative.surefire.skip` is required: `integration-tests/pom.xml` sets `<skipTests>${native.surefire.skip}</skipTests>` in the `native-image` profile without defining a default value, leaving the property unresolved if omitted.
+  - Omit `-Dquarkus.native.container-build` only when `native-image` is on `PATH` (provided by Mandrel in `.devcontainer/devcontainer.json`).
 
 ## Test prerequisites & quirks
 
-- `runtime` tests are plain JUnit (no Docker). `deployment` tests are `@QuarkusTest` and rely on the NATS JetStream **dev service**, which auto-starts a Docker container when no broker is configured — zero broker setup, but Docker must be up.
-- Dev-service containers **persist between runs**. Existing tests clean their bucket in `@BeforeEach` (`invalidateAll()` / HTTP DELETE); new tests must do the same — never assume an empty server.
-- If `quarkus.cache.type=nats` is missing, caches silently fall back to Caffeine and tests can still pass. `NatsKvCacheNativeIT#backendIsTheNatsKvCache` guards against exactly this; keep that guard in mind when touching backend wiring.
-- `@QuarkusIntegrationTest` has no bean injection — drive the app over HTTP via `CacheSmokeResource`; port comes from `quarkus.http.test-port` (default 8081).
+- **`runtime` tests**: plain JUnit against `FakeKvBucket` — no Docker or Quarkus runtime needed.
+- **`deployment` & `integration-tests`**: require a running **Docker** daemon for the NATS JetStream dev service. Dev-service containers persist across runs, so every test must clear its bucket in `@BeforeEach` (`invalidateAll()` or HTTP `DELETE` in ITs).
+- **`deployment/pom.xml` Surefire split**: `@QuarkusTest` and `QuarkusExtensionTest` cannot share a JVM fork, so Surefire runs two separate executions:
+  - `default-test`: `**/NatsCache*Test.java` (`@QuarkusTest`)
+  - `extension-scenario-tests`: `**/Bucket*Test.java` (`QuarkusExtensionTest` + `BucketCollisionValidatorTest`)
+  - Any new test class in `deployment/` that does not match one of those two globs will be silently skipped.
+- **`QuarkusExtensionTest` classloader (`BucketCollisionTestBase`)**: test classes reload in the application classloader, so shared helpers must live in a superclass (`BucketCollisionTestBase`) and fixture beans must be added as compiled classes, not `.java` sources.
+- **Silent Caffeine fallback**: missing `quarkus.cache.type=nats` (or `quarkus.cache.<name>.type=nats`) falls back to Caffeine and most tests still pass. Keep `NatsKvCacheNativeIT#backendIsTheNatsKvCache` passing when touching wiring.
+- **IT harness (`NatsKvCacheNativeIT`)**: `@QuarkusIntegrationTest` has no CDI injection; it drives the built jar/native runner over HTTP via `CacheSmokeResource` on `quarkus.http.test-port` (default `8081`).
 
-## Module map
+## Toolchain, CI & POM gotchas
 
-- `runtime/` — `NatsKvCacheImpl` (cache policy: fail-open read/write, stampede protection, provisioning retry; no quarkiverse/JNats imports), `kv/` (KV bucket access: `KvBucket` seam with six operations over encoded keys, `ReadEntry` (the `get` outcome: hit / miss / unreadable), `CreateResult`, and the `QuarkiverseKvBucket` adapter that owns every NATS call and quirk — miss-as-null, 10071 → `ALREADY_CACHED`, max-TTL substitution, purge-marker fallback, bucket configuration, raw-JNats stream purge on `NatsCacheWorkers`; unit tests use `FakeKvBucket`, the adapter itself is covered by the deployment suite), `codec/` (`KeyCodec`: JSON+base64url keys; `ValueCodec`: `{data}` JSON envelope; both are instances built by the recorder around one per-app `CacheTypeAllowList`, so no static allow-list state; `expiresAfter` is a server-side per-message TTL, not part of the payload), `NatsCachesBuildTimeConfig`, `NatsCacheBuildRecorder`.
-- `deployment/` — build steps: cache-manager info, native-image reflection registration (all app classes when any cache is `nats`-typed), and `BucketCollisionValidator` (build fails if two caches derive the same default bucket).
-- `integration-tests/` — smoke app (`src/main`) + `NatsKvCacheNativeIT`.
+- **Java 17 target vs JDK 25 devcontainer**: `pom.xml` pins `<maven.compiler.release>17</maven.compiler.release>` and `.github/workflows/build.yml` builds on Temurin 17, while `.devcontainer/devcontainer.json` ships Mandrel JDK 25. Keep target at 17 unless deliberately migrating.
+- **CodeQL (`codeql.yml`)**: uses `build-mode: none` (source scan only, no Maven compilation).
+- **Standalone parent POM**: root `pom.xml` deliberately does **not** inherit `io.quarkus:quarkus-extensions-parent` (its grandparent imports `quarkus-bom:${project.version}`, breaking resolution against `999-SNAPSHOT`). Keep the standalone parent and explicit `quarkus-bom` import.
+- **Project version**: POMs use `999-SNAPSHOT` (Quarkiverse convention); `README.md` still shows `1.0.0-SNAPSHOT` and is stale.
+- **Unmanaged pins & Dependabot**: `quarkus-nats-jetstream-client` and `assertj-core` are not in `quarkus-bom` and are pinned in root `pom.xml`. `.github/dependabot.yml` ignores `4.x` for `io.quarkus:*` and `io.quarkiverse.reactivemessaging.nats-jetstream:*`.
+- **Jackson 2 dependency (`runtime/pom.xml`, `NatsCacheJson`)**: codecs require Jackson 2 `ObjectMapper.DefaultTyping.EVERYTHING` (`NON_FINAL_AND_ENUMS` fails for final POJOs and `List.of`/`Map.of`). Keep direct `com.fasterxml.jackson.*` dependencies rather than `io.quarkus:quarkus-jackson` (which wraps Jackson 3 in Quarkus 4.x) unless redesigning the codec.
 
-## Gotchas (verified — don't "fix" these)
+## Architecture & design constraints
 
-- The parent pom **deliberately does not inherit** `io.quarkus:quarkus-extensions-parent` (see comment in root `pom.xml`): it would re-interpolate `${project.version}` against the SNAPSHOT version and break BOM resolution. Keep the standalone parent + explicit `quarkus-bom` import.
-- Project version is `999-SNAPSHOT` (Quarkiverse convention). The README's `1.0.0-SNAPSHOT` dependency snippet is stale — trust `pom.xml`.
-- Per-cache backend selector is `quarkus.cache.<name>.type` (core cache extension), **not** `quarkus.cache.caches.<name>.type`. This extension's own properties are `quarkus.nats-cache.caches.<name>.*` (`bucket`, `ttl`, `history`).
-- `expiresAfter` overloads are not yet on `io.quarkus.cache.Cache` in Quarkus 3.40; they exist ahead of upstream as public methods on `NatsKvCacheImpl` with the exact upstream signatures. When upgrading Quarkus, check whether they landed upstream and convert them to overrides.
-- Pinned versions: Quarkus `3.40.1.1`, quarkiverse `quarkus-nats-jetstream-client` `3.40.10` (not BOM-managed; the client-only split of `quarkus-reactive-messaging-nats-jetstream`, same groupId; its dev service runs `nats:2.15`). Java target is 17 (`maven.compiler.release`) even though the toolchain here is Java 21.
-- Jackson: the codec needs Jackson 2's `DefaultTyping.EVERYTHING`, so `runtime/pom.xml` depends on `com.fasterxml.jackson.{core,datatype}` directly (the 3.40.1.1 BOM pins **2.21.7**), not on `io.quarkus:quarkus-jackson` — which is already Jackson 2 on the 3.40 line, but wraps **Jackson 3** (`tools.jackson.*`, no `EVERYTHING`) if we move to 4.x. Keep the codecs pinned to Jackson 2 unless the typing design is reworked.
-- Cache writes are **create-only** (first write wins; a create also succeeds over delete/purge/expiry markers). Writes use the quarkiverse `KeyValue.create(key, value, Duration)` (≥ 3.40.7); quarkiverse has no create without a TTL (its `put` is an overwriting put, not a create), so entries without `expiresAfter` are created with the max TTL (`Integer.MAX_VALUE` seconds) and the bucket max age still caps them. Consequence: a pre-existing bucket without `allow_msg_ttl` refuses every write (fail open, nothing cached). Purges carry a 1s marker TTL (`purge(key, Duration)`) and fall back to a plain purge on buckets without `allow_msg_ttl`. Unreadable entries are purged before their reload is stored. Buckets are provisioned with a `limitMarker`, the setting that enables `allow_msg_ttl` on a KV bucket (quarkiverse ≥ 3.40.6 maps it). Needs NATS server 2.11+ (dev service runs 2.15).
-- Markers never surface as entries: the quarkiverse `get` reports a null item for a key whose only revision is a purge/delete/expiry marker, so a read right after `invalidate(key)` is a clean **miss** — not an **unreadable entry** (verified by `NatsCachePurgeMarkerTest`; the "purge then reload" path is for foreign/legacy payloads only). Don't "fix" this by mapping valueless entries to a miss.
-- Key encoding must be deterministic (ordered collections only) and fit 255 bytes; fail-fast validation at store time is intentional — don't move it to read time.
+- **Configuration keys**:
+  - Backend selector belongs to core Quarkus Cache: `quarkus.cache.type=nats` or `quarkus.cache.<name>.type=nats` (not `quarkus.cache.caches.<name>.type`).
+  - Extension settings live under `quarkus.nats-cache.caches.<name>.{bucket,ttl,history}` and `quarkus.nats-cache.allowed-packages`.
+  - Dotted cache names (e.g. `my.cache`) cannot be addressed by SmallRye per-name properties.
+- **`runtime/`**:
+  - `NatsCacheBuildRecorder`: captures `NatsCachesBuildTimeConfig` (`BUILD_AND_RUN_TIME_FIXED`) and application packages, creating one `CacheTypeAllowList` instance per app (do not convert to a static/singleton — keeps multiple apps/restarts isolated). Resolves Quarkiverse `Client` from Arc.
+  - `NatsKvCacheImpl`: cache policy only (no Quarkiverse or JNats imports). Features lazy one-shot bucket provisioning (`bucketReady`, cleared on failure for retry), per-encoded-key stampede protection (`inFlight` detached from caller cancellation via `.copy()`), sync loaders offloaded to `NatsCacheWorkers.EXECUTOR`, and fail-open reads/writes (except invalidations, which propagate failures).
+  - Ahead-of-upstream `expiresAfter` overloads (`get`/`getAsync` with `Duration`) live on `NatsKvCacheImpl` with upstream signatures; convert to `@Override` when upgrading to a Quarkus version that adds them to `Cache`.
+  - `kv/KvBucket` & `kv/QuarkiverseKvBucket`: sole NATS/JNats boundary. Translates miss-as-null -> `ReadEntry.miss()`, valueless entries -> `ReadEntry.unreadable()`, error `10071` (`JS_WRONG_LAST_SEQUENCE`) -> `CreateResult.ALREADY_CACHED`, TTL-less creates -> `MAX_TTL` (`Integer.MAX_VALUE` seconds; writes fail open if a pre-existing bucket disallows per-message TTL), purge markers -> 1s TTL with plain-purge fallback, and blocking `purgeAll()` -> `NatsCacheWorkers.EXECUTOR`.
+  - `codec/`: `NatsCacheJson` separates `PLAIN` from `typedMapper` (Jackson rejects tree ops under `EVERYTHING` typing). `KeyCodec` serializes to deterministic JSON + base64url (<=255 chars; special-cases `CompositeCacheKey` and reflects `DefaultCacheKey.cacheName`), memoizing round-trip checks per class; unordered collections (`HashSet`, etc.) in keys produce non-deterministic keys. `ValueCodec` wraps values in `{"data": ...}` so `null` results cache as `{"data": null}`. Writes are create-only (first write wins; unreadable entries are purged before reload).
+- **`deployment/`**:
+  - `NatsCacheProcessor`: registers `DefaultCacheKey` fields plus all non-interface, non-annotation application classes for Jackson reflection whenever any cache is `nats`-typed; third-party key/value types still require `@RegisterForReflection` (and `quarkus.nats-cache.allowed-packages`).
+  - `BucketCollisionValidator`: runs in `ValidationPhaseBuildItem` via `NatsCacheInfo.resolve`. Fails on derived bucket collisions unless *every* sharing cache explicitly sets `quarkus.nats-cache.caches.<name>.bucket`.
 
-## Workflow notes
+## Domain & workflow docs
 
-- Dependabot is active (`.github/dependabot.yml`): `maven` daily, `devcontainers` and `github-actions` weekly. The maven updates also cover the **Maven wrapper** — Dependabot bumps `org.apache.maven:apache-maven` in `.mvn/wrapper/maven-wrapper.properties` (already done: 3.9.14 → 3.9.16) and plugin versions in the poms. Expect these PRs; don't revert or manually fight them.
-- OpenSpec is used for spec-driven changes but is **local-only**: `openspec/` and `.opencode/` are gitignored. Repo-local commands: `/opsx-propose`, `/opsx-explore`, `/opsx-apply`, `/opsx-archive`.
-- Devcontainer (`.devcontainer/devcontainer.json`) defines the intended environment: Java 21 + Mandrel, Maven, docker-in-docker.
-
-## Agent skills
-
-### Issue tracker
-
-Issues live in this repo's GitHub Issues (`Saphri/quarkus-nats-cache`), managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default five-role vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+- `GLOSSARY.md` defines canonical terms (`nats-typed cache`, `encoded key`, `envelope`, `cached-null result`, `unreadable entry`, `marker`, `limit marker`, `fail open`, `bucket collision`, etc.) — follow `docs/agents/domain.md` and avoid synonyms listed under `_Avoid_`.
+- GitHub issue and label conventions (`gh` CLI, `Saphri/quarkus-nats-cache`) live in `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`.
+- `.opencode/` and `openspec/` are gitignored in `.gitignore`; never commit files from those directories.
